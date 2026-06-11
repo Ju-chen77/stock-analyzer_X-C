@@ -1,7 +1,31 @@
 # Stock Analyzer X-C — Project Framework
 
 ## 项目简介
-基于 Python 的智能股票分析平台，专为财报季设计。自动抓取并解析公开财务报表、年报及招股说明书，提取关键商业信息，计算核心财务指标，支持同行业横向对比及历史趋势追踪。初期以美股为主，后续扩展至 A 股。
+基于 Python 的 A 股基本面分析平台。通过 **Choice 终端 API（EMQuantAPI）** 接入企业财务数据，对**资产负债表、利润表、现金流量表**进行系统化分析，结合多种估值模型评估企业的**合理估值区间**与**成长空间**。
+
+---
+
+## 核心理念
+
+> **本项目不预测股价，而是评估"估值区间"与"成长空间"。**
+
+- 所有结论以**区间**形式呈现，而非具体目标价
+- 关键假设必须做**敏感性分析**
+- 预测必须配套**情景分析**（悲观 / 中性 / 乐观）
+- 输出"当前市值 vs 内在价值区间"的偏离度，由使用者自行判断
+
+---
+
+## 前置条件
+
+启动前必须确认：
+
+1. 本地已安装 **Choice 金融终端** 并完成登录认证
+2. 已开通 **EMQuantAPI（量化接口）** 权限
+3. 了解 Choice API 的**每日调用配额**限制
+4. `.env` 中已配置 Choice 账号信息（如需）
+
+若未开通 Choice，请评估退路方案：akshare / tushare（数据质量与覆盖度略低）。
 
 ---
 
@@ -11,15 +35,21 @@
 stock-analyzer_X-C/
 │
 ├── src/
-│   ├── scraper.py        # 抓取财务数据（负责人：Ju-chen）
-│   ├── financials.py     # 计算财务指标（负责人：朋友）
-│   ├── compare.py        # 横向对比（负责人：朋友）
-│   ├── keywords.py       # 关键词提取（负责人：Ju-chen）
+│   ├── scraper.py        # Choice API 数据抓取（负责人：Ju-chen）
+│   ├── statements.py     # 三报表数据清洗与结构化（负责人：朋友）
+│   ├── financials.py     # 财务指标计算 & 杜邦分析（负责人：朋友）
+│   ├── valuation.py      # 估值模型：DCF / PEG / 相对估值（负责人：Ju-chen）
+│   ├── scenario.py       # 情景分析与敏感性测试（负责人：朋友）
+│   ├── compare.py        # 同行业横向对比（负责人：朋友）
+│   ├── cache.py          # 本地数据缓存层，控制 API 调用量
+│   ├── industry.py       # 申万行业分类映射
 │   └── main.py           # 主程序入口
 │
-├── data/                 # 存储抓取的原始数据（不上传 GitHub）
-├── output/               # 存储分析结果（不上传 GitHub）
-├── .env                  # API Keys（绝对不上传 GitHub）
+├── data/                 # Choice 抓取的原始数据缓存（不上传 GitHub）
+│   ├── raw/              # 原始 JSON / DataFrame pickle
+│   └── processed/        # 清洗后的标准化数据
+├── output/               # 分析结果、估值报告、图表（不上传 GitHub）
+├── .env                  # Choice 账号 & API Keys（绝对不上传 GitHub）
 ├── CLAUDE.md             # 本文件
 ├── CHANGELOG.md          # 每次改动记录
 ├── requirements.txt      # Python 依赖库
@@ -30,26 +60,40 @@ stock-analyzer_X-C/
 
 ## 开发阶段
 
-### 第一阶段：美股基础功能（当前）
-- [ ] scraper.py：用 yfinance 抓取股票财务数据
-- [ ] financials.py：计算 PE、PB、ROE、EPS、营收增速、利润率
-- [ ] main.py：串联抓取和计算，输入股票代码能跑通
+### 第一阶段：Choice API 接入与三报表数据层（当前）
+- [ ] scraper.py：封装 EMQuantAPI，按股票代码拉取最近 5 年三报表
+- [ ] cache.py：本地缓存机制，避免重复调用 Choice 配额
+- [ ] statements.py：将原始数据清洗为标准化的资产负债表 / 利润表 / 现金流量表
+- [ ] main.py：输入股票代码（如 `600519.SH`），跑通"抓取→清洗→落盘"全流程
 
-### 第二阶段：对比与趋势
-- [ ] compare.py：同行业多公司横向对比
-- [ ] 历史趋势追踪，识别业绩规律
-- [ ] 输出图表（matplotlib）
+### 第二阶段：财务指标与杜邦分析
+- [ ] financials.py：基于 CAS 准则计算核心指标
+  - 盈利能力：ROE、ROA、毛利率、净利率
+  - 营运能力：应收账款周转、存货周转、总资产周转
+  - 偿债能力：资产负债率、流动比率、利息保障倍数
+  - 现金流质量：经营性现金流 / 净利润、自由现金流（FCF）
+- [ ] 杜邦分析：ROE = 净利率 × 总资产周转 × 权益乘数，分解归因
+- [ ] 历史趋势：5–10 年时间序列，识别增长可持续性
 
-### 第三阶段：文本分析
-- [ ] keywords.py：从财报文本提取关键信息
-  - 供需关系、市场前景、竞争格局、管理层指引
-- [ ] 解析 SEC EDGAR 财报 PDF（pdfplumber）
-- [ ] 用 Claude API 做智能摘要
+### 第三阶段：估值模型与成长空间测算
+- [ ] valuation.py：实现三种估值方法
+  - **DCF（现金流折现）**：基于 FCF 预测 + WACC 折现
+  - **相对估值**：PE / PB / EV/EBITDA，对标行业中位数
+  - **PEG**：增速调整后的 PE
+- [ ] scenario.py：情景分析
+  - 悲观 / 中性 / 乐观 三档假设
+  - 对关键变量（营收增速、毛利率、折现率）做敏感性矩阵
+- [ ] 输出"内在价值区间 vs 当前市值"的偏离度报告
 
-### 第四阶段：扩展 A 股
-- [ ] 接入 akshare 或 tushare
-- [ ] 中文财报解析
-- [ ] 中文关键词提取
+### 第四阶段：横向对比与可视化
+- [ ] industry.py：接入申万一级 / 二级行业分类
+- [ ] compare.py：同行业 N 家公司多维度对比（财务指标 + 估值倍数）
+- [ ] 输出 matplotlib / plotly 图表：雷达图、分位数对比、时间序列
+
+### 第五阶段：文本分析（可选）
+- [ ] 接入年报 / 季报 PDF（巨潮资讯网）
+- [ ] pdfplumber 提取"管理层讨论与分析（MD&A）"章节
+- [ ] Claude API 做中文财报摘要与风险提示提取
 
 ---
 
@@ -57,14 +101,50 @@ stock-analyzer_X-C/
 
 | 库 | 用途 |
 |---|---|
-| `yfinance` | 抓取美股财务数据和股价 |
-| `requests` | 抓取网页数据 |
-| `beautifulsoup4` | 解析网页 HTML |
-| `pandas` | 数据处理和分析 |
-| `matplotlib` | 画图表 |
-| `pdfplumber` | 解析 PDF 财报 |
-| `python-dotenv` | 读取 .env 里的 API key |
-| Claude API | 智能文本分析和关键词提取 |
+| `EMQuantAPI` | **Choice 终端量化接口**，抓取 A 股三报表与行情 |
+| `pandas` | 数据处理与分析（核心） |
+| `numpy` | 数值计算（DCF、敏感性矩阵） |
+| `scipy` | 统计与优化（如 WACC 求解） |
+| `matplotlib` / `plotly` | 图表可视化 |
+| `pdfplumber` | 解析年报 PDF（第五阶段） |
+| `python-dotenv` | 读取 `.env` 配置 |
+| `akshare` / `tushare` | **备用数据源**，Choice 未授权时使用 |
+| Claude API | 中文财报文本智能摘要（第五阶段） |
+
+---
+
+## 数据来源
+
+| 数据源 | 内容 | 用途 |
+|---|---|---|
+| **Choice 终端 API** | 三报表、行情、行业分类、一致预期 | **第一阶段主力数据源** |
+| 巨潮资讯网 | 官方年报 / 季报 PDF | 文本分析（第五阶段） |
+| 申万行业分类 | 行业归属 | 横向对比 |
+| akshare / tushare | A 股公开数据 | 备用 / 数据交叉验证 |
+
+---
+
+## 关键设计原则
+
+### 1. 估值不是预测
+任何函数返回估值结果时，**必须同时返回假设参数与置信区间**。禁止返回单一"目标价"。
+
+### 2. 缓存优先
+Choice API 有配额。任何抓取函数必须先查 `cache.py`，仅当缓存缺失或过期时才调用 API。
+
+### 3. 会计准则差异
+A 股按 **CAS（中国企业会计准则）**披露。本项目的所有指标公式以 CAS 为准，**不直接套用 US GAAP 公式**。
+
+### 4. 行业差异化
+金融、地产、周期、科技、消费等行业的财务结构差异巨大。
+- 初期聚焦 **1–2 个行业**（建议：消费 或 制造），跑通模型后再扩展
+- 银行、保险、券商等金融业**单独建模**，通用模型对其失效
+
+### 5. 不确定性必须显式
+任何输出报告必须包含：
+- 关键假设清单
+- 敏感性分析表
+- 已知风险与模型局限
 
 ---
 
@@ -86,58 +166,72 @@ stock-analyzer_X-C/
 - `refactor:` 重构
 - `wip:` 还没完成，临时保存
 - `data:` 数据相关
+- `valuation:` 估值模型相关
+- `docs:` 文档更新
 
 示例：
 ```
-feat: 添加 PE/ROE 计算函数
+feat: 添加 DCF 估值函数
 
-- 新增 calculate_pe() 接受股价和 EPS 参数
-- 新增 calculate_roe() 从资产负债表提取数据
-- 暂未处理负值情况，待后续完善
+- 新增 calculate_dcf() 接受 FCF 序列与 WACC
+- 新增三档情景默认参数（悲观/中性/乐观）
+- 暂未处理永续增长率敏感性，待第三阶段完善
 ```
 
 ---
 
 ## 编码规范
 
-- 每个函数必须写注释，说明：输入参数、返回值、功能描述
+- 每个函数必须写注释，说明：输入参数、返回值、功能描述、**所用会计假设**
 - 不确定的地方写 `# TODO: 说明`，不要乱猜
-- 数据抓取必须加错误处理（try/except），网络请求经常失败
-- API key 存在 `.env` 文件，用 `python-dotenv` 读取，绝对不能硬编码在代码里
+- API 抓取必须加错误处理（try/except）+ 重试机制 + 配额检查
+- 估值函数必须显式返回**假设参数**，便于复盘
+- API key / Choice 账号存在 `.env`，绝对不能硬编码
 
 函数注释格式：
 ```python
-def calculate_pe(price: float, eps: float) -> float:
+def calculate_dcf(
+    fcf_series: list[float],
+    wacc: float,
+    terminal_growth: float
+) -> dict:
     """
-    计算市盈率（PE Ratio）
+    基于自由现金流折现法计算企业内在价值
     
     Args:
-        price: 当前股价
-        eps: 每股收益（Earnings Per Share）
+        fcf_series: 未来 5–10 年预测自由现金流（单位：亿元）
+        wacc: 加权平均资本成本（小数，如 0.09 表示 9%）
+        terminal_growth: 永续增长率（建议 2%–3%）
     
     Returns:
-        PE 比率，若 eps 为 0 或负数返回 None
+        dict: {
+            "intrinsic_value": 内在价值（亿元）,
+            "assumptions": 输入假设字典,
+            "sensitivity": 对 wacc 与 g 的敏感性矩阵
+        }
+    
+    会计假设:
+        FCF = 经营性现金流 - 资本性支出（CAS 口径）
     """
 ```
-
----
-
-## 数据来源
-
-| 数据源 | 内容 | 用途 |
-|---|---|---|
-| yfinance | 股价、财务数据 | 第一阶段主要来源 |
-| SEC EDGAR | 官方财报、招股说明书 | 文本分析 |
-| Financial Modeling Prep | 财务指标历史数据 | 横向对比 |
-| akshare / tushare | A 股数据 | 第四阶段 |
 
 ---
 
 ## 安全注意事项
 
 - `.env` 文件已在 `.gitignore` 里，不会上传 GitHub
-- 任何 API key 不得出现在代码文件里
+- Choice 账号 / API key 不得出现在代码文件里
 - `data/` 和 `output/` 目录不上传 GitHub
+- 分析报告若包含未公开信息（如内部预测），不得对外分享
+
+---
+
+## 重要免责声明
+
+本项目所有输出**仅用于学习与研究**，不构成投资建议。
+- 模型基于历史数据与公开信息，**无法预测黑天鹅事件**
+- 估值结果对输入假设极度敏感，**小的假设偏差可能导致结论反转**
+- 使用者应自行判断风险，**项目作者不承担任何投资损失责任**
 
 ---
 
