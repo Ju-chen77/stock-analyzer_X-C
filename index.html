@@ -46,14 +46,6 @@ h1{font-family:var(--display);font-weight:700;font-size:clamp(36px,7vw,56px);
 .searchbar button:hover{background:var(--accent)}
 .hint{font-family:var(--mono);font-size:12px;color:var(--muted);margin-top:10px}
 
-/* 后端地址配置提示 */
-.api-bar{margin-top:14px;display:flex;gap:6px;align-items:center;justify-content:center;
-  font-family:var(--mono);font-size:12px;color:var(--muted)}
-.api-bar input{font-family:var(--mono);font-size:12px;border:1px solid var(--line);
-  border-radius:3px;padding:4px 10px;width:260px;color:var(--ink);background:var(--surface)}
-.api-bar .dot-status{width:8px;height:8px;border-radius:50%;background:#CCC;flex-shrink:0}
-.api-bar .dot-status.ok{background:#1DBF73}
-.api-bar .dot-status.err{background:var(--red)}
 
 .candidates{margin-top:12px;border:1px solid var(--line);border-radius:3px;
   background:var(--surface);overflow:hidden;text-align:left}
@@ -159,13 +151,7 @@ footer{width:100%;max-width:980px;margin:0 auto;font-family:var(--mono);font-siz
       <button id="go">搜索</button>
     </div>
     <div class="hint">中文名称模糊搜索 / 6 位代码精确搜索</div>
-    <div class="api-bar">
-      <span class="dot-status" id="api-dot"></span>
-      <span>后端地址：</span>
-      <input id="api-url" value="http://127.0.0.1:5000" placeholder="http://127.0.0.1:5000">
-      <button style="font-size:11px;border:1px solid var(--line);background:var(--surface);
-        border-radius:3px;padding:3px 10px;cursor:pointer" onclick="checkAPI()">测试连接</button>
-    </div>
+    <input type="hidden" id="api-url" value="http://127.0.0.1:5000">
     <div id="cands"></div>
     <div id="state" class="state-msg"></div>
   </header>
@@ -309,16 +295,6 @@ footer{width:100%;max-width:980px;margin:0 auto;font-family:var(--mono);font-siz
 // ── API 基地址 ──────────────────────────────────────────
 function getAPI() { return document.getElementById('api-url').value.replace(/\/+$/, ''); }
 
-async function checkAPI() {
-  const dot = document.getElementById('api-dot');
-  dot.className = 'dot-status';
-  try {
-    const r = await fetch(getAPI() + '/api/search?q=test', {signal: AbortSignal.timeout(5000)});
-    if (r.ok) { dot.className = 'dot-status ok'; }
-    else { dot.className = 'dot-status err'; }
-  } catch { dot.className = 'dot-status err'; }
-}
-checkAPI();
 
 // ── 工具 ────────────────────────────────────────────────
 const $ = s => document.querySelector(s);
