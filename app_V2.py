@@ -74,8 +74,13 @@ def sdiv(a, b):
         return None
 
 def fcol(df, *candidates):
-    """在 DataFrame 中找第一个包含候选关键字的列名"""
+    """在 DataFrame 中找第一个包含候选关键字的列名（精确优先，再做子串匹配）"""
     for c in candidates:
+        # 精确匹配
+        if c in df.columns:
+            return c
+    for c in candidates:
+        # 子串匹配
         col = next((col for col in df.columns if c in str(col).strip()), None)
         if col:
             return col
@@ -118,6 +123,34 @@ def annual_periods(df, n=6):
     if df is None or "_date" not in df.columns:
         return []
     return df[df["_date"].str.endswith("1231")]["_date"].tolist()[:n]
+
+
+def _get_equity(balance, periods):
+    """
+    提取股东权益，兼容多种列名。
+    找不到直接列时用「资产总计 − 负债合计」反推，确保杜邦和 ROE 不因列名问题缺失。
+    """
+    # 尝试多种新浪/东财列名写法
+    eq_col = fcol(balance,
+                  "所有者权益(或股东权益)合计",
+                  "归属于母公司所有者权益合计",
+                  "所有者权益合计",
+                  "股东权益合计",
+                  "所有者权益",
+                  "股东权益")
+    if eq_col:
+        return col_vals(balance, eq_col, periods)
+
+    # 兜底：资产 − 负债
+    assets_col = fcol(balance, "资产总计")
+    liab_col   = fcol(balance, "负债合计")
+    if assets_col and liab_col:
+        assets = col_vals(balance, assets_col, periods)
+        liabs  = col_vals(balance, liab_col,   periods)
+        return [a - l if (a is not None and l is not None) else None
+                for a, l in zip(assets, liabs)]
+
+    return [None] * len(periods)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -177,8 +210,7 @@ def compute_performance(raw):
     # ROE = 净利润 / 平均净资产
     roe = []
     if balance is not None:
-        eq_col = fcol(balance, "所有者权益", "股东权益")
-        equity = col_vals(balance, eq_col, periods)
+        equity = _get_equity(balance, periods)
         for i, (p, e) in enumerate(zip(net_profit, equity)):
             if i + 1 < len(equity) and equity[i + 1] is not None and e is not None:
                 roe.append(sdiv(p, (e + equity[i + 1]) / 2))
@@ -256,12 +288,11 @@ def compute_attribution(raw):
     rev_col    = fcol(income,  "营业收入")
     profit_col = fcol(income,  "归属于母公司所有者的净利润", "净利润")
     assets_col = fcol(balance, "资产总计")
-    equity_col = fcol(balance, "所有者权益", "股东权益")
 
     revenue    = col_vals(income,  rev_col,    periods)
     net_profit = col_vals(income,  profit_col, periods)
     assets     = col_vals(balance, assets_col, periods)
-    equity     = col_vals(balance, equity_col, periods)
+    equity     = _get_equity(balance, periods)
 
     # 杜邦三因子
     net_margin     = [sdiv(p, r) for p, r in zip(net_profit, revenue)]
@@ -332,7 +363,6 @@ def compute_risk(raw):
     gw_col     = fcol(balance, "商誉")
     assets_col = fcol(balance, "资产总计")
     liab_col   = fcol(balance, "负债合计")
-    equity_col = fcol(balance, "所有者权益", "股东权益")
 
     revenue    = col_vals(income,  rev_col,    periods)
     net_profit = col_vals(income,  profit_col, periods)
@@ -341,7 +371,7 @@ def compute_risk(raw):
     goodwill   = col_vals(balance, gw_col,     periods)
     assets     = col_vals(balance, assets_col, periods)
     liabilities= col_vals(balance, liab_col,   periods)
-    equity     = col_vals(balance, equity_col, periods)
+    equity     = _get_equity(balance, periods)
 
     # OCF（对齐年报期）
     ocf = [None] * len(periods)
