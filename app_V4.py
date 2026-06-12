@@ -742,8 +742,8 @@ def api_analyze():
         _d = _r.json().get("data", {})
         if _d:
             industry = str(_d.get("f127", ""))
-            if not hit.empty and name == code:
-                name = str(_d.get("f58", code))
+            if name == code and _d.get("f58"):
+                name = str(_d["f58"])
     except Exception:
         pass
 
