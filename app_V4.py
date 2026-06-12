@@ -242,18 +242,12 @@ def compute_performance(raw):
 
         cash_match = {
             "periods":       common,
-            # 对照组 1：收入含金量
             "revenue":       rev_c,
             "sales_cash":    sales_cash,
-            "rev_ratio":     [sdiv(s, r) for s, r in zip(sales_cash, rev_c)],
-            # 对照组 2：成本含金量
             "cost":          cost_c,
             "purchase_cash": purchase_cash,
-            "cost_ratio":    [sdiv(p, c) for p, c in zip(purchase_cash, cost_c)],
-            # 对照组 3：利润含金量
             "net_profit":    profit_c,
             "ocf":           ocf,
-            "profit_ratio":  [sdiv(o, p) for o, p in zip(ocf, profit_c)],
         }
 
     return {
@@ -972,17 +966,17 @@ footer{width:100%;max-width:980px;margin:0 auto;font-family:var(--mono);font-siz
         <div class="chart-wrap" style="margin-bottom:0">
           <div class="chart-title" style="font-size:13px">① 收入含金量</div>
           <div id="ch-cm1" style="height:220px"></div>
-          <div class="chart-note">健康：销售收到现金 / 营收 ≈ 1.0–1.17（含增值税）</div>
+          <div class="chart-note">健康：销售收到现金 ≥ 营业收入（含增值税加成）</div>
         </div>
         <div class="chart-wrap" style="margin-bottom:0">
           <div class="chart-title" style="font-size:13px">② 成本含金量</div>
           <div id="ch-cm2" style="height:220px"></div>
-          <div class="chart-note">关注：购买支付现金 vs 营业成本比值趋势</div>
+          <div class="chart-note">关注：购买支付现金 vs 营业成本走势是否同步</div>
         </div>
         <div class="chart-wrap" style="margin-bottom:0">
           <div class="chart-title" style="font-size:13px">③ 利润含金量</div>
           <div id="ch-cm3" style="height:220px"></div>
-          <div class="chart-note">健康：经营现金流 / 净利润 ≥ 0.8</div>
+          <div class="chart-note">健康：经营现金流 ≥ 净利润</div>
         </div>
       </div>
     </div>
@@ -1251,29 +1245,27 @@ function renderPerformance(perf) {
   if (cm && cm.periods && cm.periods.length) {
     const xl = cm.periods.map(fmtPeriod);
     renderCashMatch('ch-cm1', xl,
-      cm.revenue.map(yi),    cm.sales_cash.map(yi),    cm.rev_ratio,
+      cm.revenue.map(yi),    cm.sales_cash.map(yi),
       '营业收入', '销售收到现金');
     renderCashMatch('ch-cm2', xl,
-      cm.cost.map(yi),       cm.purchase_cash.map(yi), cm.cost_ratio,
+      cm.cost.map(yi),       cm.purchase_cash.map(yi),
       '营业成本', '购买支付现金');
     renderCashMatch('ch-cm3', xl,
-      cm.net_profit.map(yi), cm.ocf.map(yi),           cm.profit_ratio,
+      cm.net_profit.map(yi), cm.ocf.map(yi),
       '净利润', '经营现金流');
   }
 }
 
-function renderCashMatch(divId, xl, a, b, ratio, nameA, nameB) {
+function renderCashMatch(divId, xl, a, b, nameA, nameB) {
   Plotly.newPlot(divId, [
-    {name:nameA, type:'bar', x:xl, y:a, marker:{color:C.teal_a, line:{color:C.teal,width:1.5}}, yaxis:'y'},
-    {name:nameB, type:'bar', x:xl, y:b, marker:{color:C.amber_a,line:{color:C.amber,width:1.5}}, yaxis:'y'},
-    {name:'比值', type:'scatter', mode:'lines+markers', x:xl, y:ratio,
-      line:{color:C.red,width:2}, marker:{size:5}, yaxis:'y2'},
+    {name:nameA, type:'scatter', mode:'lines+markers', x:xl, y:a,
+      line:{color:C.teal,width:2.5}, marker:{size:5}},
+    {name:nameB, type:'scatter', mode:'lines+markers', x:xl, y:b,
+      line:{color:C.amber,width:2.5}, marker:{size:5}},
   ], {
     ...LAYOUT_BASE,
-    margin:{t:10,r:40,b:36,l:44},
-    barmode:'group',
+    margin:{t:10,r:20,b:36,l:44},
     yaxis:{title:'亿元', gridcolor:'#F0F2F4'},
-    yaxis2:{title:'比值', overlaying:'y', side:'right', showgrid:false},
     legend:{orientation:'h', y:-0.22, font:{size:10}},
   }, PLOTLY_CFG);
 }
