@@ -464,18 +464,68 @@ def compute_risk(raw):
 # 第四段：PE / PB 估值
 # ═══════════════════════════════════════════════════════════════
 def _get_pe_history(code):
-    """从乐咕乐股接口获取历史日频 PE / PB 序列（兼容新旧函数名）"""
-    for fname, kw in [("stock_a_indicator_lg", "symbol"), ("stock_a_lg_indicator", "stock")]:
-        fn = getattr(ak, fname, None)
-        if fn is None:
+    """
+    用月线收盘价 + 年报 EPS/BVPS 本地计算历史 PE/PB 序列。
+    每月 PE = 当月收盘价 / 最近一期年报 EPS（TTM 近似）
+    每月 PB = 当月收盘价 / 最近一期年报 BVPS
+    Returns: DataFrame with columns [date, pe, pb]，日期为纯数字字符串 YYYYMMDD
+    """
+    try:
+        # 月线价格（不复权，用于 PE 计算）
+        price_df = ak.stock_zh_a_hist(
+            symbol=code, period="monthly",
+            start_date="20190101", adjust=""
+        )
+        if price_df is None or price_df.empty:
+            return None
+        price_df = price_df.rename(columns={"日期": "date", "收盘": "close"})
+        price_df["date"] = price_df["date"].astype(str).str.replace("-", "", regex=False).str[:8]
+        price_df = price_df[["date", "close"]].dropna()
+    except Exception as e:
+        print(f"[ERR] 月线价格: {e}")
+        return None
+
+    try:
+        # 财务指标（含 EPS 和 BVPS）
+        ind_df = ak.stock_financial_analysis_indicator(symbol=code, start_year="2019")
+        if ind_df is None or ind_df.empty:
+            return None
+        ind_df["_d"] = ind_df["日期"].astype(str).str.replace("-", "", regex=False).str[:8]
+        # 只取年报（1231）
+        ann = ind_df[ind_df["_d"].str.endswith("1231")].copy()
+        eps_col  = "摊薄每股收益(元)"
+        bvps_col = "每股净资产_调整前(元)"
+        if eps_col not in ann.columns:
+            return None
+        ann = ann[["_d", eps_col, bvps_col]].copy()
+        ann[eps_col]  = pd.to_numeric(ann[eps_col],  errors="coerce")
+        ann[bvps_col] = pd.to_numeric(ann[bvps_col], errors="coerce")
+        ann = ann.sort_values("_d")
+    except Exception as e:
+        print(f"[ERR] 财务指标: {e}")
+        return None
+
+    # 对每个月，找对应的最近一期年报 EPS/BVPS
+    rows = []
+    for _, row in price_df.iterrows():
+        d     = row["date"]
+        close = sf(row["close"])
+        if close is None or close <= 0:
             continue
-        try:
-            df = fn(**{kw: code})
-            if df is not None and not df.empty:
-                return df.reset_index()
-        except Exception as e:
-            print(f"[ERR] PE历史({fname}): {e}")
-    return None
+        # 找 <= 当月的最新年报
+        past = ann[ann["_d"] <= d]
+        if past.empty:
+            continue
+        last    = past.iloc[-1]
+        eps_val = sf(last[eps_col])
+        bvps_val= sf(last[bvps_col])
+        pe = sdiv(close, eps_val)  if (eps_val  and eps_val  > 0) else None
+        pb = sdiv(close, bvps_val) if (bvps_val and bvps_val > 0) else None
+        rows.append({"date": d, "pe": pe, "pb": pb})
+
+    if not rows:
+        return None
+    return pd.DataFrame(rows)
 
 
 def compute_valuation(code, raw, price):
@@ -497,44 +547,25 @@ def compute_valuation(code, raw, price):
     dates, pe_series, pb_series = [], [], []
     pe_current = pb_current = pe_median = pb_median = pe_pct = pb_pct = None
 
-    if pe_hist_df is not None:
-        date_col = next((c for c in pe_hist_df.columns
-                         if 'date' in str(c).lower() or '日期' in str(c)), None)
-        pe_ttm_col = next((c for c in pe_hist_df.columns
-                           if str(c).lower() in ('pe_ttm', 'pettm')), None)
-        pb_col = next((c for c in pe_hist_df.columns
-                       if str(c).lower() == 'pb'), None)
+    if pe_hist_df is not None and not pe_hist_df.empty:
+        tmp = pe_hist_df.sort_values("date")
 
-        if date_col and pe_ttm_col:
-            tmp = pe_hist_df.copy()
-            tmp["_d"] = tmp[date_col].astype(str).str.replace("-", "", regex=False).str[:8]
-            tmp = tmp.sort_values("_d")
+        pe_vals = pd.to_numeric(tmp["pe"], errors="coerce").dropna()
+        pe_vals = pe_vals[pe_vals > 0]
+        if len(pe_vals) > 6:
+            dates      = tmp.loc[pe_vals.index, "date"].tolist()
+            pe_series  = pe_vals.tolist()
+            pe_current = float(pe_vals.iloc[-1])
+            pe_median  = float(pe_vals.median())
+            pe_pct     = float((pe_vals < pe_current).sum() / len(pe_vals) * 100)
 
-            # 取最近 5 年
-            if len(tmp) > 0:
-                cutoff = str(int(tmp["_d"].iloc[-1][:4]) - 5) + "0101"
-                tmp5 = tmp[tmp["_d"] >= cutoff].copy()
-
-                pe_vals = pd.to_numeric(tmp5[pe_ttm_col], errors="coerce")
-                pe_vals = pe_vals[pe_vals > 0].dropna()
-
-                if len(pe_vals) > 10:
-                    dates     = tmp5["_d"].tolist()[-len(pe_vals):]
-                    pe_series = pe_vals.tolist()
-                    pe_current = float(pe_vals.iloc[-1])
-                    pe_median  = float(pe_vals.median())
-                    pe_pct     = float((pe_vals < pe_current).sum() / len(pe_vals) * 100)
-
-            if pb_col and len(tmp) > 0:
-                cutoff = str(int(tmp["_d"].iloc[-1][:4]) - 5) + "0101"
-                tmp5 = tmp[tmp["_d"] >= cutoff].copy()
-                pb_vals = pd.to_numeric(tmp5[pb_col], errors="coerce")
-                pb_vals = pb_vals[pb_vals > 0].dropna()
-                if len(pb_vals) > 10:
-                    pb_series  = pb_vals.tolist()
-                    pb_current = float(pb_vals.iloc[-1])
-                    pb_median  = float(pb_vals.median())
-                    pb_pct     = float((pb_vals < pb_current).sum() / len(pb_vals) * 100)
+        pb_vals = pd.to_numeric(tmp["pb"], errors="coerce").dropna()
+        pb_vals = pb_vals[pb_vals > 0]
+        if len(pb_vals) > 6:
+            pb_series  = pb_vals.tolist()
+            pb_current = float(pb_vals.iloc[-1])
+            pb_median  = float(pb_vals.median())
+            pb_pct     = float((pb_vals < pb_current).sum() / len(pb_vals) * 100)
 
     # ── EPS / 增速（来自利润表）────────────────────────────
     periods    = annual_periods(income, 7)
