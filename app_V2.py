@@ -108,13 +108,16 @@ def yoy_list(lst):
     return result
 
 def _set_date(df):
-    """提取日期列，写入 _date（8位字符串），并按降序排列"""
+    """
+    提取日期列，写入 _date（8位纯数字字符串），并按降序排列。
+    兼容两种格式：'20161231' 和 '2016-12-31'（后者先去掉横线）。
+    """
     if df is None or df.empty:
         return df
     df = df.copy()
     date_col = fcol(df, "报表日期", "报告日")
     if date_col:
-        df["_date"] = df[date_col].astype(str).str[:8]
+        df["_date"] = df[date_col].astype(str).str.replace("-", "", regex=False).str[:8]
         df = df.sort_values("_date", ascending=False).reset_index(drop=True)
     return df
 
@@ -457,6 +460,197 @@ def compute_risk(raw):
 
 
 # ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════
+# 第四段：PE / PB 估值
+# ═══════════════════════════════════════════════════════════════
+def _get_pe_history(code):
+    """从乐咕乐股接口获取历史日频 PE / PB 序列（兼容新旧函数名）"""
+    for fname, kw in [("stock_a_indicator_lg", "symbol"), ("stock_a_lg_indicator", "stock")]:
+        fn = getattr(ak, fname, None)
+        if fn is None:
+            continue
+        try:
+            df = fn(**{kw: code})
+            if df is not None and not df.empty:
+                return df.reset_index()
+        except Exception as e:
+            print(f"[ERR] PE历史({fname}): {e}")
+    return None
+
+
+def compute_valuation(code, raw, price):
+    """
+    PE/PB 估值模块：
+      - 历史 PE/PB 序列 + 当前分位数
+      - PE 六维矩阵信号
+      - 三角验证（历史分位法 / PEG 法 / 历史均值法）
+      - 三档情景（悲观 / 中性 / 乐观）
+    Returns: dict
+    """
+    income = raw.get("income")
+    if income is None or price is None:
+        return {}
+
+    # ── 历史 PE/PB 序列 ────────────────────────────────────
+    pe_hist_df = _get_pe_history(code)
+
+    dates, pe_series, pb_series = [], [], []
+    pe_current = pb_current = pe_median = pb_median = pe_pct = pb_pct = None
+
+    if pe_hist_df is not None:
+        date_col = next((c for c in pe_hist_df.columns
+                         if 'date' in str(c).lower() or '日期' in str(c)), None)
+        pe_ttm_col = next((c for c in pe_hist_df.columns
+                           if str(c).lower() in ('pe_ttm', 'pettm')), None)
+        pb_col = next((c for c in pe_hist_df.columns
+                       if str(c).lower() == 'pb'), None)
+
+        if date_col and pe_ttm_col:
+            tmp = pe_hist_df.copy()
+            tmp["_d"] = tmp[date_col].astype(str).str.replace("-", "", regex=False).str[:8]
+            tmp = tmp.sort_values("_d")
+
+            # 取最近 5 年
+            if len(tmp) > 0:
+                cutoff = str(int(tmp["_d"].iloc[-1][:4]) - 5) + "0101"
+                tmp5 = tmp[tmp["_d"] >= cutoff].copy()
+
+                pe_vals = pd.to_numeric(tmp5[pe_ttm_col], errors="coerce")
+                pe_vals = pe_vals[pe_vals > 0].dropna()
+
+                if len(pe_vals) > 10:
+                    dates     = tmp5["_d"].tolist()[-len(pe_vals):]
+                    pe_series = pe_vals.tolist()
+                    pe_current = float(pe_vals.iloc[-1])
+                    pe_median  = float(pe_vals.median())
+                    pe_pct     = float((pe_vals < pe_current).sum() / len(pe_vals) * 100)
+
+            if pb_col and len(tmp) > 0:
+                cutoff = str(int(tmp["_d"].iloc[-1][:4]) - 5) + "0101"
+                tmp5 = tmp[tmp["_d"] >= cutoff].copy()
+                pb_vals = pd.to_numeric(tmp5[pb_col], errors="coerce")
+                pb_vals = pb_vals[pb_vals > 0].dropna()
+                if len(pb_vals) > 10:
+                    pb_series  = pb_vals.tolist()
+                    pb_current = float(pb_vals.iloc[-1])
+                    pb_median  = float(pb_vals.median())
+                    pb_pct     = float((pb_vals < pb_current).sum() / len(pb_vals) * 100)
+
+    # ── EPS / 增速（来自利润表）────────────────────────────
+    periods    = annual_periods(income, 7)
+    eps_col    = fcol(income, "基本每股收益", "每股收益")
+    profit_col = fcol(income, "归属于母公司所有者的净利润", "净利润")
+
+    eps_vals = col_vals(income, eps_col, periods) if eps_col else [None] * len(periods)
+    eps_latest = next((e for e in eps_vals if e is not None and e > 0), None)
+
+    # 3 年历史 EPS CAGR 作为增速代理
+    eps_growth = None
+    valid = [(i, e) for i, e in enumerate(eps_vals) if e is not None and e > 0]
+    if len(valid) >= 4:
+        e_new, e_old = valid[0][1], valid[3][1]
+        if e_old > 0:
+            eps_growth = (e_new / e_old) ** (1 / 3) - 1
+
+    eps_forward = eps_latest * (1 + eps_growth) if (eps_latest and eps_growth is not None) else eps_latest
+
+    pe_from_price = sdiv(price, eps_latest) if (eps_latest and eps_latest > 0) else None
+    forward_pe    = sdiv(price, eps_forward) if (eps_forward and eps_forward > 0) else None
+    peg           = sdiv(pe_from_price, (eps_growth or 0) * 100) if (pe_from_price and eps_growth and eps_growth > 0) else None
+
+    # ── PE 六维矩阵信号 ─────────────────────────────────────
+    def sig(positive_cond, neutral_cond=None):
+        if positive_cond is None:
+            return None
+        if positive_cond:
+            return "正面"
+        if neutral_cond:
+            return "中性"
+        return "负面"
+
+    matrix = [
+        {
+            "name":   "TTM PE vs 历史中位",
+            "value":  f"{pe_current:.1f}× / 中位 {pe_median:.1f}×" if (pe_current and pe_median) else "N/A",
+            "signal": sig(pe_current < pe_median if (pe_current and pe_median) else None),
+        },
+        {
+            "name":   "历史 PE 分位",
+            "value":  f"{pe_pct:.0f}%" if pe_pct is not None else "N/A",
+            "signal": sig(pe_pct < 30 if pe_pct is not None else None,
+                          pe_pct < 70 if pe_pct is not None else None),
+        },
+        {
+            "name":   "Forward PE",
+            "value":  f"{forward_pe:.1f}×" if forward_pe else "N/A",
+            "signal": sig(forward_pe < pe_from_price if (forward_pe and pe_from_price) else None),
+        },
+        {
+            "name":   "PEG",
+            "value":  f"{peg:.2f}" if peg else "N/A",
+            "signal": sig(peg < 1 if peg else None, peg < 1.5 if peg else None),
+        },
+        {
+            "name":   "PB 历史分位",
+            "value":  f"{pb_pct:.0f}%" if pb_pct is not None else "N/A",
+            "signal": sig(pb_pct < 30 if pb_pct is not None else None,
+                          pb_pct < 70 if pb_pct is not None else None),
+        },
+        {
+            "name":   "EPS 3年增速",
+            "value":  f"{eps_growth*100:.1f}%" if eps_growth else "N/A",
+            "signal": sig(eps_growth > 0.1 if eps_growth else None,
+                          eps_growth > 0   if eps_growth else None),
+        },
+    ]
+    positive_count = sum(1 for m in matrix if m["signal"] == "正面")
+
+    # ── 三角验证（三种目标价法）──────────────────────────────
+    v1 = (pe_median  * eps_forward) if (pe_median and eps_forward)  else None  # 历史分位法
+    v2 = ((eps_growth or 0) * 100 * eps_forward) if (eps_growth and eps_growth > 0 and eps_forward) else None  # PEG=1
+    v3 = None  # 历史均值法（用 5 年内 25 分位 PE）
+    if pe_series and eps_forward:
+        pe25 = float(pd.Series(pe_series).quantile(0.25))
+        v3 = pe25 * eps_forward if pe25 > 0 else None
+
+    candidates = [v for v in [v1, v2, v3] if v is not None]
+    v_low  = round(min(candidates), 2)  if candidates else None
+    v_mid  = round(float(pd.Series(candidates).median()), 2) if candidates else None
+    v_high = round(max(candidates), 2)  if candidates else None
+
+    # ── 三档情景 ────────────────────────────────────────────
+    scenarios = []
+    if eps_forward and pe_median:
+        for label, e_mult, pe_mult in [("悲观", 0.8, 0.8), ("中性", 1.0, 1.0), ("乐观", 1.2, 1.2)]:
+            tp = eps_forward * e_mult * pe_median * pe_mult
+            up = sdiv(tp - price, price)
+            scenarios.append({
+                "scenario":     label,
+                "eps":          round(eps_forward * e_mult, 2),
+                "pe":           round(pe_median * pe_mult, 1),
+                "target_price": round(tp, 2),
+                "upside":       round(up * 100, 1) if up is not None else None,
+            })
+
+    return {
+        "pe_current":    round(pe_current, 1)  if pe_current  else None,
+        "pb_current":    round(pb_current, 2)  if pb_current  else None,
+        "pe_median":     round(pe_median, 1)   if pe_median   else None,
+        "pb_median":     round(pb_median, 2)   if pb_median   else None,
+        "pe_percentile": round(pe_pct, 0)      if pe_pct is not None else None,
+        "pb_percentile": round(pb_pct, 0)      if pb_pct is not None else None,
+        "peg":           round(peg, 2)          if peg         else None,
+        "eps_ttm":       round(eps_latest, 2)  if eps_latest  else None,
+        "eps_forward":   round(eps_forward, 2) if eps_forward else None,
+        "eps_growth_3y": round(eps_growth * 100, 1) if eps_growth else None,
+        "matrix":        matrix,
+        "positive_count": positive_count,
+        "scenarios":     scenarios,
+        "target":        {"low": v_low, "mid": v_mid, "high": v_high},
+        "history":       {"dates": dates, "pe": pe_series, "pb": pb_series},
+    }
+
+
 # 价格与行业信息（复用 V1 逻辑）
 # ═══════════════════════════════════════════════════════════════
 def fetch_price(code):
@@ -519,11 +713,17 @@ def api_analyze():
     price = fetch_price(code)
     raw   = fetch_raw(code)
 
+    perf  = compute_performance(raw)
+    attr  = compute_attribution(raw)
+    risk  = compute_risk(raw)
+    val   = compute_valuation(code, raw, price)
+
     return jsonify({
-        "info": {"code": code, "name": name, "industry": industry, "price": price},
-        "performance": compute_performance(raw),
-        "attribution": compute_attribution(raw),
-        "risk":        compute_risk(raw),
+        "info":        {"code": code, "name": name, "industry": industry, "price": price},
+        "performance": perf,
+        "attribution": attr,
+        "risk":        risk,
+        "valuation":   val,
     })
 
 
@@ -717,6 +917,7 @@ footer{width:100%;max-width:980px;margin:0 auto;font-family:var(--mono);font-siz
       <button class="tab-btn active" data-tab="t1">① 业绩检验</button>
       <button class="tab-btn"        data-tab="t2">② 业绩归因</button>
       <button class="tab-btn"        data-tab="t3">③ 验证排雷</button>
+      <button class="tab-btn"        data-tab="t4">④ 估值区间</button>
     </nav>
 
     <!-- ── Tab 1：业绩检验 ── -->
@@ -792,6 +993,44 @@ footer{width:100%;max-width:980px;margin:0 auto;font-family:var(--mono);font-siz
         <div class="chart-note">存货大幅领先营收 → 可能预示行业景气下滑</div>
       </div>
     </div>
+    <!-- ── Tab 4：估值区间 ── -->
+    <div class="tab-panel" id="t4">
+      <p class="sec-label">PE / PB 六维矩阵信号</p>
+      <div class="dashboard-grid" id="val-matrix" style="grid-template-columns:repeat(6,1fr)"></div>
+
+      <div style="display:flex;gap:14px;align-items:center;margin:6px 0 22px;
+                  font-family:var(--mono);font-size:13px;color:var(--muted)">
+        <span id="val-positive-count"></span>
+        <span style="margin-left:auto">
+          EPS TTM <b id="val-eps-ttm" style="color:var(--ink)">—</b>　·
+          Forward EPS <b id="val-eps-fwd" style="color:var(--ink)">—</b>　·
+          EPS 3年增速 <b id="val-eps-g" style="color:var(--ink)">—</b>
+        </span>
+      </div>
+
+      <div class="chart-wrap">
+        <div class="chart-title">历史 PE-TTM 趋势（近 5 年）</div>
+        <div id="ch-pe-hist" style="height:250px"></div>
+        <div class="chart-note">橙色虚线 = 5年中位数 PE；蓝色虚线 = 当前 PE</div>
+      </div>
+
+      <div class="chart-wrap">
+        <div class="chart-title">历史 PB 趋势（近 5 年）</div>
+        <div id="ch-pb-hist" style="height:220px"></div>
+        <div class="chart-note">橙色虚线 = 5年中位数 PB；蓝色虚线 = 当前 PB</div>
+      </div>
+
+      <p class="sec-label" style="margin-top:28px">三角验证 · 目标价区间</p>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:28px"
+           id="val-targets"></div>
+
+      <p class="sec-label">三档情景分析（基于历史中位 PE × 情景 EPS）</p>
+      <table class="dupont-table" id="val-scenario-table"></table>
+      <p class="chart-note" style="margin-top:8px">
+        ⚠️ 本框架不预测目标价，所有估值以区间形式呈现，假设基于历史数据，不构成投资建议。
+      </p>
+    </div>
+
   </main>
 
   <footer id="footer" style="display:none">
@@ -882,6 +1121,7 @@ function render(data) {
   renderPerformance(data.performance);
   renderAttribution(data.attribution);
   renderRisk(data.risk);
+  renderValuation(data.valuation);
   outEl.style.display = 'block';
   footEl.style.display = 'block';
 }
@@ -1105,6 +1345,109 @@ function renderRisk(risk) {
       barmode:'group',
       yaxis:{title:'%', gridcolor:'#F0F2F4', ticksuffix:'%'},
     }, PLOTLY_CFG);
+  }
+}
+
+// ── 第四段：估值区间 ──────────────────────────────────────
+function renderValuation(val) {
+  if (!val || !val.matrix) return;
+
+  // 矩阵信号卡
+  const sigColor = {'正面':'green','中性':'yellow','负面':'red'};
+  $('#val-matrix').innerHTML = val.matrix.map(m => {
+    const s = m.signal || 'grey';
+    const cls = sigColor[s] || 'grey';
+    return `<div class="dash-card ${cls}" style="padding:14px 12px">
+      <div class="d-head">
+        <span class="d-dot ${cls}"></span>
+        <span class="d-name" style="font-size:13px">${m.name}</span>
+      </div>
+      <div class="d-val" style="font-size:18px">${m.value}</div>
+      <div class="d-unit">${s || '—'}</div>
+    </div>`;
+  }).join('');
+
+  const total = val.matrix.length;
+  const pos = val.positive_count || 0;
+  const summary = pos >= 5 ? '强正面信号 → 进入三角验证' :
+                  pos >= 3 ? '中性 → 配合排雷模块综合判断' : '估值吸引力不足';
+  $('#val-positive-count').innerHTML =
+    `正面信号 <b style="color:var(--accent);font-size:16px">${pos} / ${total}</b>　·　${summary}`;
+
+  $('#val-eps-ttm').textContent = val.eps_ttm  != null ? val.eps_ttm  + ' 元' : '—';
+  $('#val-eps-fwd').textContent = val.eps_forward != null ? val.eps_forward + ' 元' : '—';
+  $('#val-eps-g').textContent   = val.eps_growth_3y != null ? val.eps_growth_3y + '%' : '—';
+
+  // 历史 PE 折线
+  const h = val.history || {};
+  if (h.dates && h.pe && h.pe.length) {
+    const xl = h.dates.map(d => d.slice(0,4)+'-'+d.slice(4,6)+'-'+d.slice(6,8));
+    const med = val.pe_median;
+    const cur = val.pe_current;
+    Plotly.newPlot('ch-pe-hist', [
+      {name:'PE-TTM', type:'scatter', mode:'lines', x:xl, y:h.pe,
+        line:{color:C.teal, width:1.5}, fill:'tozeroy', fillcolor:'rgba(11,110,93,.08)'},
+      med ? {name:'中位数 '+med+'×', type:'scatter', mode:'lines', x:[xl[0],xl[xl.length-1]],
+        y:[med,med], line:{color:C.amber,width:1.5,dash:'dot'}} : null,
+      cur ? {name:'当前 '+cur+'×',   type:'scatter', mode:'lines', x:[xl[0],xl[xl.length-1]],
+        y:[cur,cur], line:{color:C.blue, width:1.5,dash:'dot'}} : null,
+    ].filter(Boolean), {
+      ...LAYOUT_BASE,
+      yaxis:{title:'PE-TTM', gridcolor:'#F0F2F4'},
+    }, PLOTLY_CFG);
+  }
+
+  // 历史 PB 折线
+  if (h.dates && h.pb && h.pb.length) {
+    const xl = h.dates.map(d => d.slice(0,4)+'-'+d.slice(4,6)+'-'+d.slice(6,8));
+    const xl2 = xl.slice(-h.pb.length);
+    const med = val.pb_median;
+    const cur = val.pb_current;
+    Plotly.newPlot('ch-pb-hist', [
+      {name:'PB', type:'scatter', mode:'lines', x:xl2, y:h.pb,
+        line:{color:C.purple, width:1.5}, fill:'tozeroy', fillcolor:'rgba(109,61,178,.07)'},
+      med ? {name:'中位数 '+med+'×', type:'scatter', mode:'lines', x:[xl2[0],xl2[xl2.length-1]],
+        y:[med,med], line:{color:C.amber,width:1.5,dash:'dot'}} : null,
+      cur ? {name:'当前 '+cur+'×',   type:'scatter', mode:'lines', x:[xl2[0],xl2[xl2.length-1]],
+        y:[cur,cur], line:{color:C.blue, width:1.5,dash:'dot'}} : null,
+    ].filter(Boolean), {
+      ...LAYOUT_BASE,
+      yaxis:{title:'PB', gridcolor:'#F0F2F4'},
+    }, PLOTLY_CFG);
+  }
+
+  // 三角验证目标价
+  const t = val.target || {};
+  const tCards = [
+    {label:'下沿（悲观）', v:t.low,  sub:'历史分位法 / PEG法 / 均值法 取最低'},
+    {label:'中位（中性）', v:t.mid,  sub:'三种方法目标价中位数'},
+    {label:'上沿（乐观）', v:t.high, sub:'历史分位法 / PEG法 / 均值法 取最高'},
+  ];
+  $('#val-targets').innerHTML = tCards.map(c => `
+    <div class="kpi-card" style="border-color:var(--line);text-align:center">
+      <div class="ktag">${c.label}</div>
+      <div class="kval" style="font-size:26px">
+        ${c.v != null ? '¥'+c.v : '—'}
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin-top:6px">${c.sub}</div>
+    </div>`).join('');
+
+  // 三档情景表
+  if (val.scenarios && val.scenarios.length) {
+    const hdrs = ['情景','假设 EPS（元）','假设 PE','目标价（元）','潜在空间'];
+    const rows = val.scenarios.map(s => {
+      const color = s.scenario==='乐观'?C.teal : s.scenario==='悲观'?C.red:'';
+      const upStr = s.upside != null ? s.upside+'%' : '—';
+      return `<tr>
+        <td style="text-align:left;font-weight:600;color:${color}">${s.scenario}</td>
+        <td>${s.eps != null ? s.eps : '—'}</td>
+        <td>${s.pe  != null ? s.pe+'×' : '—'}</td>
+        <td><b>${s.target_price != null ? '¥'+s.target_price : '—'}</b></td>
+        <td style="color:${s.upside>0?C.teal:C.red}">${upStr}</td>
+      </tr>`;
+    }).join('');
+    $('#val-scenario-table').innerHTML =
+      `<thead><tr>${hdrs.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${rows}</tbody>`;
   }
 }
 
