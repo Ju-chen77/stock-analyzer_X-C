@@ -1425,38 +1425,68 @@ function renderValuation(val) {
   // 历史 PE 折线
   const h = val.history || {};
   if (h.dates && h.pe && h.pe.length) {
-    const xl = h.dates.map(d => d.slice(0,4)+'-'+d.slice(4,6)+'-'+d.slice(6,8));
+    // 把 "20191231" → 数字时间戳，彻底绕开 Plotly 日期字符串解析
+    const peYears  = h.dates.map(d => d.slice(0,4)+'-'+d.slice(4,6)+'-'+d.slice(6,8));
     const med = val.pe_median;
     const cur = val.pe_current;
-    Plotly.newPlot('ch-pe-hist', [
-      {name:'PE-TTM', type:'scatter', mode:'lines', x:xl, y:h.pe,
-        line:{color:C.teal, width:1.5}, fill:'tozeroy', fillcolor:'rgba(11,110,93,.08)'},
-      med ? {name:'中位数 '+med+'×', type:'scatter', mode:'lines', x:[xl[0],xl[xl.length-1]],
-        y:[med,med], line:{color:C.amber,width:1.5,dash:'dot'}} : null,
-      cur ? {name:'当前 '+cur+'×',   type:'scatter', mode:'lines', x:[xl[0],xl[xl.length-1]],
-        y:[cur,cur], line:{color:C.blue, width:1.5,dash:'dot'}} : null,
-    ].filter(Boolean), {
-      ...LAYOUT_BASE,
-      yaxis:{title:'PE-TTM', gridcolor:'#F0F2F4'},
+    const traces_pe = [
+      {
+        name: 'PE-TTM',
+        type: 'scatter', mode: 'lines',
+        x: peYears, y: h.pe.map(Number),
+        line: {color: C.teal, width: 2},
+      }
+    ];
+    if (med) traces_pe.push({
+      name: '中位数 '+med+'×', type:'scatter', mode:'lines',
+      x:[peYears[0], peYears[peYears.length-1]], y:[med, med],
+      line:{color:C.amber, width:2, dash:'dot'},
+    });
+    if (cur) traces_pe.push({
+      name: '当前 '+cur+'×', type:'scatter', mode:'lines',
+      x:[peYears[0], peYears[peYears.length-1]], y:[cur, cur],
+      line:{color:C.blue, width:2, dash:'dash'},
+    });
+    Plotly.newPlot('ch-pe-hist', traces_pe, {
+      paper_bgcolor: '#FFFFFF', plot_bgcolor: '#FAFBFC',
+      font: {family:"'IBM Plex Mono',monospace", size:11, color:'#6A7480'},
+      margin: {t:10, r:10, b:36, l:52},
+      legend: {orientation:'h', y:-0.2, font:{size:11}},
+      xaxis: {type:'date', tickfont:{size:11}, gridcolor:'#F0F2F4'},
+      yaxis: {title:'PE-TTM', gridcolor:'#F0F2F4'},
     }, PLOTLY_CFG);
   }
 
   // 历史 PB 折线
   if (h.dates && h.pb && h.pb.length) {
-    const xl = h.dates.map(d => d.slice(0,4)+'-'+d.slice(4,6)+'-'+d.slice(6,8));
-    const xl2 = xl.slice(-h.pb.length);
+    const pbYears = h.dates.map(d => d.slice(0,4)+'-'+d.slice(4,6)+'-'+d.slice(6,8));
     const med = val.pb_median;
     const cur = val.pb_current;
-    Plotly.newPlot('ch-pb-hist', [
-      {name:'PB', type:'scatter', mode:'lines', x:xl2, y:h.pb,
-        line:{color:C.purple, width:1.5}, fill:'tozeroy', fillcolor:'rgba(109,61,178,.07)'},
-      med ? {name:'中位数 '+med+'×', type:'scatter', mode:'lines', x:[xl2[0],xl2[xl2.length-1]],
-        y:[med,med], line:{color:C.amber,width:1.5,dash:'dot'}} : null,
-      cur ? {name:'当前 '+cur+'×',   type:'scatter', mode:'lines', x:[xl2[0],xl2[xl2.length-1]],
-        y:[cur,cur], line:{color:C.blue, width:1.5,dash:'dot'}} : null,
-    ].filter(Boolean), {
-      ...LAYOUT_BASE,
-      yaxis:{title:'PB', gridcolor:'#F0F2F4'},
+    const traces_pb = [
+      {
+        name: 'PB',
+        type: 'scatter', mode: 'lines',
+        x: pbYears, y: h.pb.map(Number),
+        line: {color: C.purple, width: 2},
+      }
+    ];
+    if (med) traces_pb.push({
+      name: '中位数 '+med+'×', type:'scatter', mode:'lines',
+      x:[pbYears[0], pbYears[pbYears.length-1]], y:[med, med],
+      line:{color:C.amber, width:2, dash:'dot'},
+    });
+    if (cur) traces_pb.push({
+      name: '当前 '+cur+'×', type:'scatter', mode:'lines',
+      x:[pbYears[0], pbYears[pbYears.length-1]], y:[cur, cur],
+      line:{color:C.blue, width:2, dash:'dash'},
+    });
+    Plotly.newPlot('ch-pb-hist', traces_pb, {
+      paper_bgcolor: '#FFFFFF', plot_bgcolor: '#FAFBFC',
+      font: {family:"'IBM Plex Mono',monospace", size:11, color:'#6A7480'},
+      margin: {t:10, r:10, b:36, l:52},
+      legend: {orientation:'h', y:-0.2, font:{size:11}},
+      xaxis: {type:'date', tickfont:{size:11}, gridcolor:'#F0F2F4'},
+      yaxis: {title:'PB', gridcolor:'#F0F2F4'},
     }, PLOTLY_CFG);
   }
 
