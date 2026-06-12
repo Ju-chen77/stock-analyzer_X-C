@@ -4,6 +4,31 @@
 
 ---
 
+## [app_V4.1] — 2026-06-12
+
+### 新增
+
+- **独立前端 `index.html`**：从 Flask 内嵌模板中提取为独立 HTML 文件，可部署到 GitHub Pages
+- **Render 云端部署**：新增 `render.yaml` + `requirements.txt`，后端部署至 https://stock-analyzer-x-c.onrender.com
+- **CORS 跨域支持**：后端 `app_V4.py` 新增 `Access-Control-Allow-Origin: *` 响应头，允许前端从任意域名调用 API
+- **公网可用**：任何人可通过浏览器访问，无需本地运行 Python
+
+### 改进
+
+- **Part B 现金流对照图**：柱状图改为双折线图，去掉比值（ratio）右轴，更直观对比两组数据走势
+- **东方财富直接 API**：用 `push2.eastmoney.com` 替代有 bug 的 `stock_individual_info_em`，稳定获取行业名称和总股本
+- **PE/PB 口径统一**：历史 PE 和当前 PE 均使用年报 EPS 计算，避免东财"动态 PE"（季度年化）导致百分位失真
+- **一致预期年份修正**：优先匹配当前年份（2026）的预测列，而非第一个匹配列
+
+### 修复
+
+- `stock_individual_info_em` pandas 报错（ValueError: Length mismatch）→ 改用东方财富直接 HTTP API
+- 一致预期取到 2025 年旧数据 → 优先匹配 2026 列
+- PE 百分位 = 0%（动态 PE 与年报 PE 口径不一致）→ 统一用年报 EPS 基准
+- `fetch_price()` 备用路径也用 `_get_spot()` 替代已废弃的 `stock_individual_info_em`
+
+---
+
 ## [app_V4] — 2026-06-12
 
 ### 新增
