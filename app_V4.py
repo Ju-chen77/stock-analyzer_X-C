@@ -736,9 +736,14 @@ def api_analyze():
         name = str(hit.iloc[0]["name"])
 
     try:
-        info_df = ak.stock_individual_info_em(symbol=code)
-        info_d  = dict(zip(info_df["item"].astype(str), info_df["value"]))
-        industry = str(info_d.get("行业", ""))
+        secid = f"1.{code}" if code.startswith(("6", "9")) else f"0.{code}"
+        import requests as _req
+        _r = _req.get(f"https://push2.eastmoney.com/api/qt/stock/get?secid={secid}&fields=f57,f58,f127", timeout=10)
+        _d = _r.json().get("data", {})
+        if _d:
+            industry = str(_d.get("f127", ""))
+            if not hit.empty and name == code:
+                name = str(_d.get("f58", code))
     except Exception:
         pass
 
@@ -969,22 +974,20 @@ footer{width:100%;max-width:980px;margin:0 auto;font-family:var(--mono);font-siz
       </div>
 
       <p class="sec-label" style="margin-top:24px">Part B · 利润表 vs 现金流量表 三组对照</p>
-      <div class="charts-3col">
-        <div class="chart-wrap" style="margin-bottom:0">
-          <div class="chart-title" style="font-size:13px">① 收入含金量</div>
-          <div id="ch-cm1" style="height:220px"></div>
-          <div class="chart-note">健康：销售收到现金 ≥ 营业收入（含增值税加成）</div>
-        </div>
-        <div class="chart-wrap" style="margin-bottom:0">
-          <div class="chart-title" style="font-size:13px">② 成本含金量</div>
-          <div id="ch-cm2" style="height:220px"></div>
-          <div class="chart-note">关注：购买支付现金 vs 营业成本走势是否同步</div>
-        </div>
-        <div class="chart-wrap" style="margin-bottom:0">
-          <div class="chart-title" style="font-size:13px">③ 利润含金量</div>
-          <div id="ch-cm3" style="height:220px"></div>
-          <div class="chart-note">健康：经营现金流 ≥ 净利润</div>
-        </div>
+      <div class="chart-wrap">
+        <div class="chart-title">① 收入含金量</div>
+        <div id="ch-cm1" style="height:240px"></div>
+        <div class="chart-note">健康：销售收到现金 ≥ 营业收入（含增值税加成）</div>
+      </div>
+      <div class="chart-wrap">
+        <div class="chart-title">② 成本含金量</div>
+        <div id="ch-cm2" style="height:240px"></div>
+        <div class="chart-note">关注：购买支付现金 vs 营业成本走势是否同步</div>
+      </div>
+      <div class="chart-wrap">
+        <div class="chart-title">③ 利润含金量</div>
+        <div id="ch-cm3" style="height:240px"></div>
+        <div class="chart-note">健康：经营现金流 ≥ 净利润</div>
       </div>
     </div>
 
