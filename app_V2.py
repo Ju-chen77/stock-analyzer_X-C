@@ -1146,15 +1146,27 @@ async function analyze(code) {
   } catch(e) { setState('抓取失败，数据源可能临时不可用，请重试。', true); }
 }
 
-// ── 渲染主入口 ───────────────────────────────────────────
+// ── 渲染主入口（懒渲染：只有切到对应 Tab 时才绘图）────────
+let _renderCache = {};   // 记录哪个 Tab 已渲染过
+let _appData = null;     // 缓存全量 data
+
 function render(data) {
+  _appData = data;
+  _renderCache = {};
   renderHeader(data.info);
-  renderPerformance(data.performance);
-  renderAttribution(data.attribution);
-  renderRisk(data.risk);
-  renderValuation(data.valuation);
+  // Tab ① 默认可见，立即渲染
+  renderTab('t1');
   outEl.style.display = 'block';
   footEl.style.display = 'block';
+}
+
+function renderTab(tabId) {
+  if (_renderCache[tabId] || !_appData) return;
+  _renderCache[tabId] = true;
+  if (tabId === 't1') renderPerformance(_appData.performance);
+  if (tabId === 't2') renderAttribution(_appData.attribution);
+  if (tabId === 't3') renderRisk(_appData.risk);
+  if (tabId === 't4') renderValuation(_appData.valuation);
 }
 
 // ── 股票头 ──────────────────────────────────────────────
@@ -1171,9 +1183,10 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
     document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
     btn.classList.add('active');
-    $('#' + btn.dataset.tab).classList.add('active');
-    // Plotly 在隐藏时不会自动调整大小，切换后 relayout
-    window.dispatchEvent(new Event('resize'));
+    const tabId = btn.dataset.tab;
+    $('#' + tabId).classList.add('active');
+    // 切换后再渲染该 Tab 的图表（避免隐藏容器高度为 0 的问题）
+    renderTab(tabId);
   });
 });
 
