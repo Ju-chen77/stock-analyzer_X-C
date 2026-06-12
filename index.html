@@ -151,7 +151,7 @@ footer{width:100%;max-width:980px;margin:0 auto;font-family:var(--mono);font-siz
       <button id="go">搜索</button>
     </div>
     <div class="hint">中文名称模糊搜索 / 6 位代码精确搜索</div>
-    <input type="hidden" id="api-url" value="http://127.0.0.1:5000">
+    <input type="hidden" id="api-url" value="">
     <div id="cands"></div>
     <div id="state" class="state-msg"></div>
   </header>
@@ -293,7 +293,14 @@ footer{width:100%;max-width:980px;margin:0 auto;font-family:var(--mono);font-siz
 
 <script>
 // ── API 基地址 ──────────────────────────────────────────
-function getAPI() { return document.getElementById('api-url').value.replace(/\/+$/, ''); }
+function getAPI() {
+  const v = document.getElementById('api-url').value;
+  if (v) return v.replace(/\/+$/, '');
+  // 本地开发用 localhost，线上用同域（Render 部署时前后端同源）
+  if (location.hostname === '127.0.0.1' || location.hostname === 'localhost')
+    return 'http://127.0.0.1:5000';
+  return location.origin;
+}
 
 
 // ── 工具 ────────────────────────────────────────────────
