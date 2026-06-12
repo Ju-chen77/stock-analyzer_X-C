@@ -21,6 +21,13 @@ PROJECT_DESC = "业绩检验 · 业绩归因 · 验证排雷"
 app = Flask(__name__)
 
 
+@app.after_request
+def add_cors(response):
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    return response
+
+
 # ═══════════════════════════════════════════════════════════════
 # 初始化：股票代码表
 # ═══════════════════════════════════════════════════════════════
