@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>三段式财报透视 — A 股基本面分析</title>
+<style>
+:root {
+  --bg: #EBEEF1; --surface: #fff; --ink: #11151B; --muted: #6A7480;
+  --accent: #0B6E5D; --accent-soft: #E0F0EB; --line: #DCE0E6;
+}
+* { box-sizing: border-box; margin: 0; padding: 0 }
+html, body { height: 100%; background: var(--bg); color: var(--ink);
+  font-family: 'Inter', system-ui, sans-serif; line-height: 1.6 }
+.wrap { min-height: 100vh; display: flex; flex-direction: column;
+  justify-content: center; align-items: center; padding: 40px 24px }
+.card { background: var(--surface); border: 1px solid var(--line);
+  border-radius: 6px; padding: 48px 40px; max-width: 620px; width: 100% }
+h1 { font-size: 32px; font-weight: 700; letter-spacing: -.02em; margin-bottom: 6px }
+.sub { color: var(--accent); font-size: 13px; letter-spacing: .12em;
+  text-transform: uppercase; margin-bottom: 20px }
+p { color: var(--muted); font-size: 15px; margin-bottom: 16px }
+.features { list-style: none; margin: 16px 0 24px; padding: 0 }
+.features li { padding: 6px 0; font-size: 14px; color: var(--ink) }
+.features li::before { content: ''; display: inline-block; width: 8px; height: 8px;
+  border-radius: 50%; background: var(--accent); margin-right: 10px }
+.code-block { background: #1a1e26; color: #e0e6ed; border-radius: 4px;
+  padding: 16px 20px; font-family: 'Consolas', monospace; font-size: 14px;
+  line-height: 1.8; margin: 20px 0; overflow-x: auto }
+.code-block .comment { color: #6a7480 }
+.code-block .cmd { color: #7ec8a0 }
+.tag { display: inline-block; background: var(--accent-soft); color: var(--accent);
+  font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 3px }
+a { color: var(--accent); text-decoration: none }
+a:hover { text-decoration: underline }
+footer { margin-top: 24px; font-size: 12px; color: var(--muted); text-align: center }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <div class="sub">A 股基本面分析平台</div>
+    <h1>三段式财报透视</h1>
+    <p>基于 Python + AKShare 的 A 股基本面分析工具，四段式分析框架：业绩检验、业绩归因、验证排雷、估值区间。</p>
+
+    <ul class="features">
+      <li>营收 / 净利润 / 毛利率 / ROE 趋势与 YoY 增速</li>
+      <li>杜邦三因子分解与费用率分析</li>
+      <li>利润含金量 / 收入质量 / 库存压力 排雷仪表盘</li>
+      <li>PE / PB 历史分位 + 三角验证估值区间</li>
+      <li>主营业务构成与资产负债结构堆积图</li>
+    </ul>
+
+    <p>本项目为本地运行的 Flask 应用，需要 Python 环境：</p>
+
+    <div class="code-block">
+      <span class="comment"># 1. 克隆仓库</span><br>
+      <span class="cmd">git clone https://github.com/Ju-chen77/stock-analyzer_X-C.git</span><br>
+      <span class="cmd">cd stock-analyzer_X-C</span><br><br>
+      <span class="comment"># 2. 安装依赖</span><br>
+      <span class="cmd">pip install -r requirements.txt</span><br><br>
+      <span class="comment"># 3. 启动</span><br>
+      <span class="cmd">python app_V4.py</span><br><br>
+      <span class="comment"># 4. 打开浏览器访问</span><br>
+      <span class="cmd">http://127.0.0.1:5000</span>
+    </div>
+
+    <p><span class="tag">免责声明</span>　所有输出仅用于学习与研究，不构成投资建议。</p>
+  </div>
+  <footer>
+    创作者：Sophia & Juniper ·
+    <a href="https://github.com/Ju-chen77/stock-analyzer_X-C" target="_blank">GitHub 仓库</a>
+  </footer>
+</div>
+</body>
+</html>
