@@ -138,6 +138,22 @@ h1{font-family:var(--display);font-weight:700;font-size:clamp(36px,7vw,56px);
 .dupont-table td:first-child{text-align:left;font-weight:600;font-family:var(--body)}
 .dupont-table tr:last-child td{border-bottom:0}
 
+/* ── 杜邦贡献度卡片 ── */
+.contrib-card{background:var(--surface);border:1px solid var(--line);
+  border-radius:6px;padding:16px 20px;margin-bottom:16px}
+.contrib-item{min-width:100px}
+.contrib-label{font-size:12px;color:var(--muted);margin-bottom:2px}
+.contrib-val{font-family:var(--mono);font-size:18px;font-weight:600}
+
+/* ── 现金流验证卡片 ── */
+.cf-check-card{background:var(--surface);border:1px solid var(--line);
+  border-radius:6px;padding:14px 16px;text-align:center}
+.cf-check-ico{font-size:22px;margin-bottom:6px}
+.cf-check-name{font-family:var(--display);font-weight:600;font-size:14px;margin-bottom:2px}
+.cf-check-desc{font-size:12px;color:var(--muted);margin-bottom:8px}
+.cf-check-val{font-family:var(--mono);font-size:22px;font-weight:700;margin-bottom:4px}
+.cf-check-thr{font-size:11px;color:var(--muted)}
+
 footer{width:100%;max-width:980px;margin:0 auto;font-family:var(--mono);font-size:12px;
   color:var(--muted);text-align:center;padding:16px 0 32px;border-top:1px solid var(--line)}
 
@@ -249,9 +265,12 @@ footer{width:100%;max-width:980px;margin:0 auto;font-family:var(--mono);font-siz
       </div>
     </div>
 
-    <!-- ── Tab 2：业绩归因 ── -->
+    <!-- ── Tab 2：业绩归因（四层递进） ── -->
     <div class="tab-panel" id="t2">
-      <p class="sec-label">杜邦三因子分解 · ROE = 净利率 × 总资产周转率 × 权益乘数</p>
+
+      <!-- 第一层：ROE 杜邦分解 -->
+      <p class="sec-label">第一层 · ROE 杜邦分解</p>
+      <div id="dupont-contrib-card" class="contrib-card" style="display:none"></div>
       <div class="chart-wrap">
         <div class="chart-title">ROE 杜邦分解趋势</div>
         <div id="ch-dupont" style="height:280px"></div>
@@ -259,12 +278,26 @@ footer{width:100%;max-width:980px;margin:0 auto;font-family:var(--mono);font-siz
       </div>
       <table class="dupont-table" id="dupont-table"></table>
 
-      <p class="sec-label" style="margin-top:32px">费用率趋势（占营业收入 %）</p>
+      <!-- 第三层：利润率拆解 -->
+      <p class="sec-label" style="margin-top:36px">第三层 · 利润率拆解</p>
       <div class="chart-wrap">
-        <div class="chart-title">销售 / 管理 / 研发 / 财务 费用率</div>
+        <div class="chart-title">利润率瀑布图（最新年报）</div>
+        <div id="ch-waterfall" style="height:300px"></div>
+        <div class="chart-note">从毛利率出发，各项费用逐层吞噬，最终剩余净利率</div>
+      </div>
+      <div class="chart-wrap" style="margin-top:20px">
+        <div class="chart-title">利润率趋势：毛利率 / 净利率 / 扣非净利率 / 营业利润率</div>
+        <div id="ch-margin-trend" style="height:260px"></div>
+      </div>
+      <div class="chart-wrap" style="margin-top:20px">
+        <div class="chart-title">费用率趋势（占营业收入 %）</div>
         <div id="ch-expense" style="height:250px"></div>
         <div class="chart-note">费用率上升可能压缩利润空间；研发费用率上升通常是战略性投入</div>
       </div>
+
+      <!-- 第四层：现金流验证 -->
+      <p class="sec-label" style="margin-top:36px">第四层 · 现金流验证</p>
+      <div id="cf-validation" style="display:none"></div>
     </div>
 
     <!-- ── Tab 3：验证排雷 ── -->
@@ -673,6 +706,40 @@ function renderAttribution(attr) {
   const em  = attr.equity_mult;
   const roe = attr.roe.map(pct);
 
+  // ── 第一层：杜邦贡献度卡片 ──
+  const dc = attr.dupont_contrib;
+  if (dc) {
+    const sign = v => v > 0 ? '+' : '';
+    const clr  = v => v > 0 ? '#0B6E5D' : v < 0 ? '#B23A2E' : '#6A7480';
+    const card = $('#dupont-contrib-card');
+    card.style.display = 'block';
+    card.innerHTML = `
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+        <span style="font-weight:700;font-size:15px">ROE 变化</span>
+        <span style="font-size:22px;font-weight:700;color:${clr(dc.roe_change)}">${sign(dc.roe_change)}${dc.roe_change} pct</span>
+        <span style="color:#6A7480;font-size:13px">${fmtPeriod(dc.period_prev)} → ${fmtPeriod(dc.period_curr)}</span>
+      </div>
+      <div style="display:flex;gap:16px;flex-wrap:wrap">
+        <div class="contrib-item">
+          <div class="contrib-label">净利率贡献</div>
+          <div class="contrib-val" style="color:${clr(dc.nm_contrib)}">${sign(dc.nm_contrib)}${dc.nm_contrib} pct</div>
+        </div>
+        <div class="contrib-item">
+          <div class="contrib-label">周转率贡献</div>
+          <div class="contrib-val" style="color:${clr(dc.at_contrib)}">${sign(dc.at_contrib)}${dc.at_contrib} pct</div>
+        </div>
+        <div class="contrib-item">
+          <div class="contrib-label">杠杆贡献</div>
+          <div class="contrib-val" style="color:${clr(dc.em_contrib)}">${sign(dc.em_contrib)}${dc.em_contrib} pct</div>
+        </div>
+        <div class="contrib-item" style="border-left:3px solid ${C.teal};padding-left:12px">
+          <div class="contrib-label">主导因子</div>
+          <div class="contrib-val" style="color:${C.teal};font-weight:700">${dc.main_driver}</div>
+        </div>
+      </div>`;
+  }
+
+  // ── 杜邦趋势图 ──
   Plotly.newPlot('ch-dupont', [
     {name:'净利率 %',   type:'scatter', mode:'lines+markers', x:xl, y:nm,
       line:{color:C.teal, width:2.5}, marker:{size:6}, yaxis:'y'},
@@ -689,12 +756,9 @@ function renderAttribution(attr) {
     margin:{t:10, r:50, b:36, l:52},
   }, PLOTLY_CFG);
 
+  // ── 杜邦明细表 ──
   const rows = xl.map((yr, i) => [
-    yr,
-    fmtP(nm[i]),
-    fmtX(at[i]),
-    fmtX(em[i]),
-    fmtP(roe[i]),
+    yr, fmtP(nm[i]), fmtX(at[i]), fmtX(em[i]), fmtP(roe[i]),
   ]);
   const thead = `<tr>${['期间','净利率','总资产周转','权益乘数','ROE（验证）']
     .map(h=>`<th>${h}</th>`).join('')}</tr>`;
@@ -703,6 +767,59 @@ function renderAttribution(attr) {
   ).join('');
   $('#dupont-table').innerHTML = `<thead>${thead}</thead><tbody>${tbody}</tbody>`;
 
+  // ── 第三层：利润率瀑布图 ──
+  const wf = attr.waterfall;
+  if (wf && wf.items) {
+    const names  = wf.items.map(it => it.name);
+    const values = wf.items.map(it => it.value);
+    const measures = wf.items.map((it, i) =>
+      i === 0 ? 'absolute' : i === wf.items.length - 1 ? 'total' : 'relative');
+    const colors = wf.items.map(it =>
+      it.name === '毛利率' || it.name === '净利率' ? C.teal :
+      it.value >= 0 ? '#7ec8a0' : C.red);
+    Plotly.newPlot('ch-waterfall', [{
+      type:'waterfall', orientation:'v',
+      x: names, y: values, measure: measures,
+      connector:{line:{color:'#DCE0E6', width:1.5}},
+      increasing:{marker:{color:'#7ec8a0'}},
+      decreasing:{marker:{color:'#E8A09A'}},
+      totals:{marker:{color:C.teal}},
+      textposition:'outside',
+      text: values.map(v => (v >= 0 ? '+' : '') + v.toFixed(1) + '%'),
+      textfont:{size:12, color:'#11151B'},
+    }], {
+      ...LAYOUT_BASE,
+      xaxis:{type:'category', tickfont:{size:12}},
+      yaxis:{title:'%', gridcolor:'#F0F2F4', ticksuffix:'%'},
+      margin:{t:30, r:30, b:60, l:52},
+    }, PLOTLY_CFG);
+  }
+
+  // ── 利润率趋势折线 ──
+  const gm  = attr.gross_margin  ? attr.gross_margin.map(pct) : [];
+  const opm = attr.op_margin     ? attr.op_margin.map(pct)    : [];
+  const dm  = attr.deduct_margin ? attr.deduct_margin.map(pct): [];
+
+  if (gm.length) {
+    const mTraces = [
+      {name:'毛利率',     type:'scatter', mode:'lines+markers', x:xl, y:gm,
+        line:{color:C.teal, width:2.5}, marker:{size:5}},
+      {name:'净利率',     type:'scatter', mode:'lines+markers', x:xl, y:nm,
+        line:{color:C.amber, width:2.5}, marker:{size:5}},
+      {name:'营业利润率', type:'scatter', mode:'lines+markers', x:xl, y:opm,
+        line:{color:C.blue, width:2}, marker:{size:5}},
+    ];
+    if (dm.some(v => v !== null)) {
+      mTraces.push({name:'扣非净利率', type:'scatter', mode:'lines+markers', x:xl, y:dm,
+        line:{color:C.red, width:2, dash:'dot'}, marker:{size:5}});
+    }
+    Plotly.newPlot('ch-margin-trend', mTraces, {
+      ...LAYOUT_BASE,
+      yaxis:{title:'%', gridcolor:'#F0F2F4', ticksuffix:'%'},
+    }, PLOTLY_CFG);
+  }
+
+  // ── 费用率趋势 ──
   const sr = attr.selling_rate.map(pct);
   const ar = attr.admin_rate.map(pct);
   const rdr= attr.rd_rate.map(pct);
@@ -721,6 +838,46 @@ function renderAttribution(attr) {
     ...LAYOUT_BASE,
     yaxis:{title:'%', gridcolor:'#F0F2F4', ticksuffix:'%'},
   }, PLOTLY_CFG);
+
+  // ── 第四层：现金流验证总结 ──
+  const cfv = attr.cf_validation;
+  if (cfv) {
+    const vEl = $('#cf-validation');
+    vEl.style.display = 'block';
+    const ico = (pass) => pass ? '✅' : '❌';
+    const verdictColor = {PASS:'#0B6E5D', WARNING:'#C07B12', FAIL:'#B23A2E'};
+    const verdictText  = {PASS:'通过', WARNING:'关注', FAIL:'不通过'};
+    const rq = cfv.rev_quality, pq = cfv.profit_quality, fcf = cfv.fcf;
+    vEl.innerHTML = `
+      <div class="cf-verdict" style="border-left:4px solid ${verdictColor[cfv.verdict] || '#A0AAB4'};padding:16px 20px;background:#fff;border-radius:4px;margin-bottom:12px">
+        <div style="font-size:13px;color:#6A7480;margin-bottom:4px">现金流验证结论（${fmtPeriod(cfv.period)}）</div>
+        <div style="font-size:20px;font-weight:700;color:${verdictColor[cfv.verdict]}">${verdictText[cfv.verdict] || '—'}</div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
+        <div class="cf-check-card">
+          <div class="cf-check-ico">${ico(rq !== null && rq >= 1.0)}</div>
+          <div class="cf-check-name">收入真实性</div>
+          <div class="cf-check-desc">销售现金 / 营收</div>
+          <div class="cf-check-val">${rq !== null ? rq.toFixed(2) : '—'}</div>
+          <div class="cf-check-thr">≥ 1.0 为健康</div>
+        </div>
+        <div class="cf-check-card">
+          <div class="cf-check-ico">${ico(pq !== null && pq >= 0.8)}</div>
+          <div class="cf-check-name">利润真实性</div>
+          <div class="cf-check-desc">经营现金流 / 净利润</div>
+          <div class="cf-check-val">${pq !== null ? pq.toFixed(2) : '—'}</div>
+          <div class="cf-check-thr">≥ 0.8 为健康</div>
+        </div>
+        <div class="cf-check-card">
+          <div class="cf-check-ico">${ico(fcf !== null && fcf >= 0)}</div>
+          <div class="cf-check-name">盈利可持续性</div>
+          <div class="cf-check-desc">自由现金流（FCF）</div>
+          <div class="cf-check-val">${fcf !== null ? fcf + ' 亿' : '—'}</div>
+          <div class="cf-check-thr">≥ 0 为健康</div>
+        </div>
+      </div>
+      <div class="chart-note" style="margin-top:12px">前三层归因结论必须通过现金流验证才能采信；验证不通过的结论需打折或作废</div>`;
+  }
 }
 
 // ── 第三段：验证排雷 ──────────────────────────────────────

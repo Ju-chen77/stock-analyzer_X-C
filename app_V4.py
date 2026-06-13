@@ -386,12 +386,15 @@ def compute_performance(raw):
 # ═══════════════════════════════════════════════════════════════
 def compute_attribution(raw):
     """
-    杜邦三因子分解 + 四项费用率趋势
-    ROE = 净利率 × 总资产周转率 × 权益乘数
+    四层递进业绩归因：
+    第一层 ROE 杜邦分解（含贡献度量化）
+    第三层 利润率拆解（瀑布 + 扣非净利率）
+    第四层 现金流验证总结（三组通过/不通过）
     Returns: dict
     """
-    income  = raw.get("income")
-    balance = raw.get("balance")
+    income   = raw.get("income")
+    balance  = raw.get("balance")
+    cashflow = raw.get("cashflow")
 
     if income is None or balance is None:
         return {}
@@ -401,15 +404,17 @@ def compute_attribution(raw):
         return {}
 
     rev_col    = fcol(income,  "营业收入")
+    cost_col   = fcol(income,  "营业成本")
     profit_col = fcol(income,  "归属于母公司所有者的净利润", "净利润")
     assets_col = fcol(balance, "资产总计")
 
     revenue    = col_vals(income,  rev_col,    periods)
+    cost       = col_vals(income,  cost_col,   periods)
     net_profit = col_vals(income,  profit_col, periods)
     assets     = col_vals(balance, assets_col, periods)
     equity     = _get_equity(balance, periods)
 
-    # 杜邦三因子
+    # ── 第一层：杜邦三因子 ──
     net_margin     = [sdiv(p, r) for p, r in zip(net_profit, revenue)]
     asset_turnover = [sdiv(r, a) for r, a in zip(revenue, assets)]
     equity_mult    = [sdiv(a, e) for a, e in zip(assets, equity)]
@@ -418,11 +423,114 @@ def compute_attribution(raw):
         for m, t, eq in zip(net_margin, asset_turnover, equity_mult)
     ]
 
-    # 四项费用率
+    # 贡献度量化：最新期 vs 上一期的 pct 变化
+    dupont_contrib = None
+    if len(periods) >= 2:
+        nm0, nm1 = net_margin[0], net_margin[1]
+        at0, at1 = asset_turnover[0], asset_turnover[1]
+        em0, em1 = equity_mult[0], equity_mult[1]
+        roe0, roe1 = roe_dupont[0], roe_dupont[1]
+        if all(v is not None for v in [nm0, nm1, at0, at1, em0, em1, roe0, roe1]):
+            roe_chg = (roe0 - roe1) * 100
+            nm_contrib  = (nm0 - nm1) * at1 * em1 * 100
+            at_contrib  = nm1 * (at0 - at1) * em1 * 100
+            em_contrib  = nm1 * at1 * (em0 - em1) * 100
+            drivers = [
+                ("净利率", nm_contrib),
+                ("总资产周转率", at_contrib),
+                ("权益乘数", em_contrib),
+            ]
+            main_driver = max(drivers, key=lambda x: abs(x[1]))[0]
+            dupont_contrib = {
+                "roe_change":    round(roe_chg, 2),
+                "nm_contrib":    round(nm_contrib, 2),
+                "at_contrib":    round(at_contrib, 2),
+                "em_contrib":    round(em_contrib, 2),
+                "main_driver":   main_driver,
+                "period_curr":   periods[0],
+                "period_prev":   periods[1],
+            }
+
+    # ── 第三层：利润率拆解（瀑布数据） ──
     def expense_rate(col_key):
         col = fcol(income, col_key)
         vals = col_vals(income, col, periods)
         return [sdiv(v, r) for v, r in zip(vals, revenue)]
+
+    gross_margin = [sdiv((r - c) if (r and c) else None, r)
+                    for r, c in zip(revenue, cost)]
+
+    selling_rate = expense_rate("销售费用")
+    admin_rate   = expense_rate("管理费用")
+    rd_rate      = expense_rate("研发费用")
+    finance_rate = expense_rate("财务费用")
+
+    # 营业利润率
+    op_col = fcol(income, "营业利润")
+    op_profit = col_vals(income, op_col, periods)
+    op_margin = [sdiv(o, r) for o, r in zip(op_profit, revenue)]
+
+    # 扣非净利润率
+    deduct_col = fcol(income, "扣除非经常性损益后的净利润", "扣非净利润")
+    deduct_vals = col_vals(income, deduct_col, periods) if deduct_col else [None] * len(periods)
+    deduct_margin = [sdiv(d, r) for d, r in zip(deduct_vals, revenue)]
+
+    # 最新期瀑布数据（毛利率 → 各费用拖累 → 净利率）
+    waterfall = None
+    if gross_margin[0] is not None:
+        wf_items = [
+            {"name": "毛利率",   "value": round((gross_margin[0] or 0) * 100, 2)},
+            {"name": "销售费用", "value": -round((selling_rate[0] or 0) * 100, 2)},
+            {"name": "管理费用", "value": -round((admin_rate[0] or 0) * 100, 2)},
+            {"name": "研发费用", "value": -round((rd_rate[0] or 0) * 100, 2)},
+            {"name": "财务费用", "value": -round((finance_rate[0] or 0) * 100, 2)},
+        ]
+        # 其他损益 = 净利率 - (毛利率 - 四项费用率)
+        explained = sum(it["value"] for it in wf_items)
+        net_m_pct = round((net_margin[0] or 0) * 100, 2)
+        other = round(net_m_pct - explained, 2)
+        wf_items.append({"name": "其他损益", "value": other})
+        wf_items.append({"name": "净利率", "value": net_m_pct})
+        waterfall = {"period": periods[0], "items": wf_items}
+
+    # ── 第四层：现金流验证总结 ──
+    cf_validation = None
+    if cashflow is not None:
+        sc_col  = fcol(cashflow, "销售商品、提供劳务收到的现金", "销售商品")
+        ocf_col = fcol(cashflow, "经营活动产生的现金流量净额", "经营活动产生")
+        capex_col = fcol(cashflow, "购建固定资产、无形资产和其他长期资产支付的现金",
+                         "购建固定资产")
+
+        cf_periods = [p for p in periods if p in (cashflow.index if hasattr(cashflow, 'index') else [])]
+        if not cf_periods and len(periods) > 0:
+            cf_periods = periods
+
+        sc  = col_vals(cashflow, sc_col,  cf_periods[:1])
+        ocf = col_vals(cashflow, ocf_col, cf_periods[:1])
+        capex = col_vals(cashflow, capex_col, cf_periods[:1])
+        rev0 = col_vals(income, rev_col, cf_periods[:1])
+        np0  = col_vals(income, profit_col, cf_periods[:1])
+
+        rev_quality   = sdiv(sc[0], rev0[0]) if sc and rev0 else None
+        profit_quality = sdiv(ocf[0], np0[0]) if ocf and np0 else None
+        fcf = (ocf[0] or 0) - abs(capex[0] or 0) if ocf and capex else None
+
+        def _verdict(rq, pq, fcf_val):
+            fails = 0
+            if rq is not None and rq < 1.0:   fails += 1
+            if pq is not None and pq < 0.8:   fails += 1
+            if fcf_val is not None and fcf_val < 0: fails += 1
+            if fails == 0: return "PASS"
+            if fails >= 2: return "FAIL"
+            return "WARNING"
+
+        cf_validation = {
+            "period":          cf_periods[0] if cf_periods else None,
+            "rev_quality":     round(rev_quality, 2) if rev_quality else None,
+            "profit_quality":  round(profit_quality, 2) if profit_quality else None,
+            "fcf":             round(fcf / 1e8, 2) if fcf else None,
+            "verdict":         _verdict(rev_quality, profit_quality, fcf),
+        }
 
     return {
         "periods":       periods,
@@ -430,10 +538,16 @@ def compute_attribution(raw):
         "asset_turnover": asset_turnover,
         "equity_mult":   equity_mult,
         "roe":           roe_dupont,
-        "selling_rate":  expense_rate("销售费用"),
-        "admin_rate":    expense_rate("管理费用"),
-        "rd_rate":       expense_rate("研发费用"),
-        "finance_rate":  expense_rate("财务费用"),
+        "dupont_contrib": dupont_contrib,
+        "selling_rate":  selling_rate,
+        "admin_rate":    admin_rate,
+        "rd_rate":       rd_rate,
+        "finance_rate":  finance_rate,
+        "gross_margin":  gross_margin,
+        "op_margin":     op_margin,
+        "deduct_margin": deduct_margin,
+        "waterfall":     waterfall,
+        "cf_validation": cf_validation,
     }
 
 
@@ -951,5 +1065,5 @@ def index():
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5001))
+    port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=True)
