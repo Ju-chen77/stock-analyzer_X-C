@@ -12,6 +12,7 @@ os.environ["no_proxy"] = "*"
 
 import math
 import akshare as ak
+import requests as _req
 import pandas as pd
 from flask import Flask, request, jsonify, Response
 
@@ -37,7 +38,7 @@ def _load_code_name():
         if df is not None and not df.empty:
             if len(df.columns) == 2:
                 df.columns = ["code", "name"]
-            print(f"[启动] 已加载 {len(df)} 只 A 股 (主源)")
+            print(f"[启动] 已加载 {len(df)} 只 A 股")
             return df
     except Exception as e:
         print(f"[启动] 主源失败: {e}")
@@ -168,7 +169,7 @@ def _get_equity(balance, periods):
 # ═══════════════════════════════════════════════════════════════
 def fetch_raw(code):
     """
-    抓取三大报表原始 DataFrame。
+    抓取三大报表原始 DataFrame（AKShare → 新浪财经）。
     Returns: dict {income, balance, cashflow}
     """
     sina = to_sina_code(code)
@@ -181,6 +182,52 @@ def fetch_raw(code):
             print(f"[ERR] {label}: {e}")
             out[key] = None
     return out
+
+
+# ═══════════════════════════════════════════════════════════════
+# 主营构成（按产品）— East Money API
+# ═══════════════════════════════════════════════════════════════
+def _fetch_segment_revenue(code):
+    """
+    从东方财富获取主营构成（按产品），仅取年报数据。
+    Returns: dict {periods: [...], segments: [{name, revenue, cost, gross_margin}, ...]}
+    按年份分组，每年的各产品线收入、成本、毛利率。
+    """
+    try:
+        prefix = "SH" if code.startswith(("6", "9")) else "SZ"
+        url = f"https://emweb.securities.eastmoney.com/PC_HSF10/BusinessAnalysis/PageAjax?code={prefix}{code}"
+        r = _req.get(url, timeout=15,
+                     headers={"User-Agent": "Mozilla/5.0",
+                              "Referer": "https://emweb.securities.eastmoney.com"})
+        data = r.json()
+        items = data.get("zygcfx", [])
+        if not items:
+            return {}
+
+        # 筛选：按产品(MAINOP_TYPE=2)、年报(含12-31)
+        annual = [it for it in items
+                  if it.get("MAINOP_TYPE") == "2"
+                  and "12-31" in str(it.get("REPORT_DATE", ""))]
+        if not annual:
+            return {}
+
+        # 按报告期分组
+        from collections import defaultdict
+        by_year = defaultdict(list)
+        for it in annual:
+            yr = str(it["REPORT_DATE"])[:4]
+            by_year[yr].append({
+                "name":         it.get("ITEM_NAME", ""),
+                "revenue":      sf(it.get("MAIN_BUSINESS_INCOME")),
+                "cost":         sf(it.get("MAIN_BUSINESS_COST")),
+                "gross_margin": sf(it.get("GROSS_RPOFIT_RATIO")),
+            })
+
+        periods = sorted(by_year.keys(), reverse=True)[:5]
+        return {"periods": periods, "by_year": {yr: by_year[yr] for yr in periods}}
+    except Exception as e:
+        print(f"[ERR] segment revenue: {e}")
+        return {}
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -257,16 +304,53 @@ def compute_performance(raw):
             "ocf":           ocf,
         }
 
+    # ── Part D / E：资产 & 负债堆积图 ──────────────────────
+    asset_stack = {}
+    liability_stack = {}
+    if balance is not None:
+        bs_periods = annual_periods(balance, 6)
+        # 资产项
+        asset_items = [
+            ("货币资金",         "货币资金"),
+            ("存货",             "存货"),
+            ("应收票据及应收账款", "应收票据及应收账款", "应收账款"),
+            ("合同资产",         "合同资产"),
+            ("预付款项",         "预付款项"),
+        ]
+        asset_data = {}
+        for item_def in asset_items:
+            label = item_def[0]
+            col = fcol(balance, *item_def[1:])
+            asset_data[label] = col_vals(balance, col, bs_periods)
+        asset_stack = {"periods": bs_periods, "items": asset_data}
+
+        # 负债项
+        liab_items = [
+            ("合同负债/预收款项",  "合同负债", "预收款项"),
+            ("应付票据及应付账款", "应付票据及应付账款", "应付账款"),
+            ("应付职工薪酬",      "应付职工薪酬"),
+            ("短期借款",          "短期借款"),
+            ("长期借款",          "长期借款"),
+        ]
+        liab_data = {}
+        for item_def in liab_items:
+            label = item_def[0]
+            col = fcol(balance, *item_def[1:])
+            liab_data[label] = col_vals(balance, col, bs_periods)
+        liability_stack = {"periods": bs_periods, "items": liab_data}
+
     return {
-        "periods":      periods,
-        "revenue":      revenue,
-        "net_profit":   net_profit,
-        "gross_margin": gross_margin,
-        "net_margin":   net_margin,
-        "roe":          roe,
-        "revenue_yoy":  revenue_yoy,
-        "profit_yoy":   profit_yoy,
-        "cash_match":   cash_match,
+        "periods":          periods,
+        "revenue":          revenue,
+        "net_profit":       net_profit,
+        "gross_margin":     gross_margin,
+        "net_margin":       net_margin,
+        "roe":              roe,
+        "revenue_yoy":      revenue_yoy,
+        "profit_yoy":       profit_yoy,
+        "cash_match":       cash_match,
+        "asset_stack":      asset_stack,
+        "liability_stack":  liability_stack,
     }
 
 
@@ -464,61 +548,49 @@ def compute_risk(raw):
 # ═══════════════════════════════════════════════════════════════
 # 第四段：PE / PB 估值
 # ═══════════════════════════════════════════════════════════════
-def _get_pe_history(code, raw):
+def _get_pe_history_ak(code):
     """
-    用月线收盘价 + 年报 EPS/BVPS 本地计算历史 PE/PB 序列。
-    每月 PE = 当月收盘价 / 最近一期年报 EPS
-    每月 PB = 当月收盘价 / 最近一期年报 BVPS（= 归母权益 / 股本）
-
-    全程只用新浪数据源（日线 + 三报表），不依赖东财/同花顺接口，
-    因为后者在境外服务器（Render）上会被拦截返回空。
-
-    Args:
-        code: 6 位股票代码
-        raw:  fetch_raw() 返回的三报表 dict（已含 _date 列）
-    Returns: DataFrame with columns [date, pe, pb]，日期为 YYYYMMDD 字符串
+    用 akshare 日线（新浪源）重采样为月线 + 财务指标计算历史 PE/PB。
+    Returns: DataFrame [date, pe, pb]
     """
     try:
-        # 月线价格：取新浪日线后重采样为月末收盘
         daily = ak.stock_zh_a_daily(symbol=to_sina_code(code), adjust="")
-        if daily is None or daily.empty or "close" not in daily.columns:
+        if daily is None or daily.empty:
             return None
-        daily = daily[["date", "close"]].copy()
-        daily["date"] = pd.to_datetime(daily["date"], errors="coerce")
-        daily = daily.dropna(subset=["date"])
-        monthly = daily.set_index("date").resample("ME")["close"].last().reset_index()
-        monthly = monthly[monthly["date"] >= pd.Timestamp("2019-01-01")]
-        monthly["date"] = monthly["date"].dt.strftime("%Y%m%d")
-        price_df = monthly.dropna()
+        daily["dt"] = pd.to_datetime(daily["date"], errors="coerce")
+        daily = daily.dropna(subset=["dt", "close"])
+        daily = daily[daily["dt"] >= pd.Timestamp("2019-01-01")]
+        freq = "ME" if hasattr(pd.tseries.offsets, "MonthEnd") else "M"
+        try:
+            monthly = daily.set_index("dt").resample(freq)["close"].last().reset_index()
+        except ValueError:
+            monthly = daily.set_index("dt").resample("M")["close"].last().reset_index()
+        monthly["date"] = monthly["dt"].dt.strftime("%Y%m%d")
+        price_df = monthly[["date", "close"]].dropna()
+        if price_df.empty:
+            return None
     except Exception as e:
-        print(f"[ERR] 新浪日线->月线: {e}")
+        print(f"[ERR] 月线价格: {e}")
         return None
 
-    # 年报 EPS / BVPS：从已加载的新浪三报表里取，避免再调被拦的接口
-    income  = raw.get("income")
-    balance = raw.get("balance")
-    if income is None or balance is None:
+    try:
+        ind_df = ak.stock_financial_analysis_indicator(symbol=code, start_year="2019")
+        if ind_df is None or ind_df.empty:
+            return None
+        ind_df["_d"] = ind_df["日期"].astype(str).str.replace("-", "", regex=False).str[:8]
+        ann = ind_df[ind_df["_d"].str.endswith("1231")].copy()
+        eps_col  = "摊薄每股收益(元)"
+        bvps_col = "每股净资产_调整前(元)"
+        if eps_col not in ann.columns:
+            return None
+        ann = ann[["_d", eps_col, bvps_col]].copy()
+        ann[eps_col]  = pd.to_numeric(ann[eps_col],  errors="coerce")
+        ann[bvps_col] = pd.to_numeric(ann[bvps_col], errors="coerce")
+        ann = ann.sort_values("_d")
+    except Exception as e:
+        print(f"[ERR] 财务指标: {e}")
         return None
 
-    periods = annual_periods(income, n=10)  # 降序的 1231 期
-    if not periods:
-        return None
-
-    eps_col    = fcol(income, "基本每股收益", "稀释每股收益")
-    shares_col = fcol(balance, "实收资本(或股本)", "实收资本", "股本")
-    eps_vals    = col_vals(income, eps_col, periods) if eps_col else [None] * len(periods)
-    equity_vals = _get_equity(balance, periods)
-    share_vals  = col_vals(balance, shares_col, periods) if shares_col else [None] * len(periods)
-
-    ann_rows = []
-    for d, eps, eq, sh in zip(periods, eps_vals, equity_vals, share_vals):
-        bvps = sdiv(eq, sh) if (eq is not None and sh) else None
-        ann_rows.append({"_d": d, "eps": eps, "bvps": bvps})
-    ann = pd.DataFrame(ann_rows).sort_values("_d")
-    if ann.empty:
-        return None
-
-    # 对每个月，匹配 <= 当月的最近一期年报
     rows = []
     for _, row in price_df.iterrows():
         d     = row["date"]
@@ -529,8 +601,8 @@ def _get_pe_history(code, raw):
         if past.empty:
             continue
         last     = past.iloc[-1]
-        eps_val  = sf(last["eps"])
-        bvps_val = sf(last["bvps"])
+        eps_val  = sf(last[eps_col])
+        bvps_val = sf(last[bvps_col])
         pe = sdiv(close, eps_val)  if (eps_val  and eps_val  > 0) else None
         pb = sdiv(close, bvps_val) if (bvps_val and bvps_val > 0) else None
         rows.append({"date": d, "pe": pe, "pb": pb})
@@ -538,6 +610,11 @@ def _get_pe_history(code, raw):
     if not rows:
         return None
     return pd.DataFrame(rows)
+
+
+def _get_pe_history(code):
+    """akshare 月线 + 财务指标计算历史 PE/PB"""
+    return _get_pe_history_ak(code)
 
 
 def compute_valuation(code, raw, price):
@@ -554,7 +631,7 @@ def compute_valuation(code, raw, price):
         return {}
 
     # ── 历史 PE/PB 序列 ────────────────────────────────────
-    pe_hist_df = _get_pe_history(code, raw)
+    pe_hist_df = _get_pe_history(code)
 
     dates, pe_series, pb_series = [], [], []
     pe_current = pb_current = pe_median = pb_median = pe_pct = pb_pct = None
@@ -697,6 +774,7 @@ def compute_valuation(code, raw, price):
 # 价格与行业信息（复用 V1 逻辑）
 # ═══════════════════════════════════════════════════════════════
 def fetch_price(code):
+    """获取最新股价（akshare）"""
     try:
         df = ak.stock_zh_a_daily(symbol=to_sina_code(code), adjust="")
         if df is not None and not df.empty and "close" in df.columns:
@@ -810,14 +888,11 @@ def api_analyze():
         name = _sina_name(code) or code
 
     try:
-        secid = f"1.{code}" if code.startswith(("6", "9")) else f"0.{code}"
-        import requests as _req
-        _r = _req.get(f"https://push2.eastmoney.com/api/qt/stock/get?secid={secid}&fields=f57,f58,f127", timeout=10)
-        _d = _r.json().get("data", {})
-        if _d:
-            industry = str(_d.get("f127", ""))
-            if name == code and _d.get("f58"):
-                name = str(_d["f58"])
+        info_df = ak.stock_individual_info_em(symbol=code)
+        info_d  = dict(zip(info_df["item"].astype(str), info_df["value"]))
+        industry = str(info_d.get("行业", ""))
+        if name == code and info_d.get("股票简称"):
+            name = str(info_d["股票简称"])
     except Exception:
         pass
 
@@ -828,6 +903,7 @@ def api_analyze():
     attr  = compute_attribution(raw)
     risk  = compute_risk(raw)
     val   = compute_valuation(code, raw, price)
+    seg   = _fetch_segment_revenue(code)
 
     return jsonify({
         "info":        {"code": code, "name": name, "industry": industry, "price": price},
@@ -835,48 +911,9 @@ def api_analyze():
         "attribution": attr,
         "risk":        risk,
         "valuation":   val,
+        "segment":     seg,
     })
 
-
-@app.route("/api/health")
-def api_health():
-    """
-    诊断接口：逐个测试每个数据源在当前服务器上的可达性。
-    用于排查境外服务器（Render）哪些中国数据源被拦截。
-    返回每个源的 ok/fail + 行数或错误信息。
-    """
-    import requests as _req
-    code = "600519"
-    sina = to_sina_code(code)
-    checks = {}
-
-    def _try(name, fn):
-        try:
-            r = fn()
-            checks[name] = {"ok": True, "detail": r}
-        except Exception as e:
-            checks[name] = {"ok": False, "detail": f"{type(e).__name__}: {e}"}
-
-    _try("code_name_list", lambda: f"{len(ak.stock_info_a_code_name())} 行")
-    _try("spot_em", lambda: f"{len(ak.stock_zh_a_spot_em())} 行")
-    _try("report_sina_income",
-         lambda: f"{len(ak.stock_financial_report_sina(stock=sina, symbol='利润表'))} 行")
-    _try("hist_monthly",
-         lambda: f"{len(ak.stock_zh_a_hist(symbol=code, period='monthly', start_date='20230101', adjust=''))} 行")
-    _try("abstract_ths",
-         lambda: f"{len(ak.stock_financial_abstract_ths(symbol=code, indicator='按年度'))} 行")
-    _try("daily_sina",
-         lambda: f"{len(ak.stock_zh_a_daily(symbol=sina, adjust=''))} 行")
-    _try("individual_info_em",
-         lambda: f"{len(ak.stock_individual_info_em(symbol=code))} 行")
-
-    def _push2():
-        r = _req.get(f"https://push2.eastmoney.com/api/qt/stock/get?secid=1.{code}&fields=f57,f58,f127", timeout=10)
-        d = r.json().get("data", {})
-        return f"name={d.get('f58')}, industry={d.get('f127')}"
-    _try("push2_eastmoney", _push2)
-
-    return jsonify({"code_name_loaded": int(len(_CODE_NAME)), "checks": checks})
 
 
 @app.route("/")
@@ -1043,7 +1080,7 @@ footer{width:100%;max-width:980px;margin:0 auto;font-family:var(--mono);font-siz
 
   <!-- ── 搜索主页 ── -->
   <header class="hero">
-    <div class="eyebrow">A 股基本面分析 · AKShare</div>
+    <div class="eyebrow">A 股基本面分析</div>
     <h1>__PROJECT_NAME__</h1>
     <p class="tag">__PROJECT_DESC__</p>
     <div class="searchbar">
@@ -1103,6 +1140,34 @@ footer{width:100%;max-width:980px;margin:0 auto;font-family:var(--mono);font-siz
         <div class="chart-title">③ 利润含金量</div>
         <div id="ch-cm3" style="height:240px"></div>
         <div class="chart-note">健康：经营现金流 ≥ 净利润</div>
+      </div>
+
+      <p class="sec-label" style="margin-top:24px">Part C · 主营业务构成（按产品）</p>
+      <div class="chart-wrap">
+        <div class="chart-title">各业务线营业收入（亿元）</div>
+        <div id="ch-seg-rev" style="height:280px"></div>
+      </div>
+      <div class="chart-wrap">
+        <div class="chart-title">各业务线毛利率（%）</div>
+        <div id="ch-seg-gm" style="height:240px"></div>
+      </div>
+      <div class="chart-wrap">
+        <div class="chart-title">各业务线营业成本（亿元）</div>
+        <div id="ch-seg-cost" style="height:240px"></div>
+      </div>
+
+      <p class="sec-label" style="margin-top:24px">Part D · 历年资产结构堆积图</p>
+      <div class="chart-wrap">
+        <div class="chart-title">主要资产项目构成（亿元）</div>
+        <div id="ch-asset-stack" style="height:300px"></div>
+        <div class="chart-note">货币资金、存货、应收票据及应收账款、合同资产、预付款项</div>
+      </div>
+
+      <p class="sec-label" style="margin-top:24px">Part E · 历年负债结构堆积图</p>
+      <div class="chart-wrap">
+        <div class="chart-title">主要负债项目构成（亿元）</div>
+        <div id="ch-liab-stack" style="height:300px"></div>
+        <div class="chart-note">合同负债/预收款项、应付票据及应付账款、应付职工薪酬、短期借款、长期借款</div>
       </div>
     </div>
 
@@ -1184,7 +1249,7 @@ footer{width:100%;max-width:980px;margin:0 auto;font-family:var(--mono);font-siz
   </main>
 
   <footer id="footer" style="display:none">
-    数据来自 AKShare 公开接口，可能存在延迟或缺失，仅供学习研究，不构成投资建议。
+    数据来自 AKShare / 新浪财经 / 东方财富公开接口，可能存在延迟或缺失，仅供学习研究，不构成投资建议。
   </footer>
 </div>
 
@@ -1282,7 +1347,12 @@ function render(data) {
 function renderTab(tabId) {
   if (_renderCache[tabId] || !_appData) return;
   _renderCache[tabId] = true;
-  if (tabId === 't1') renderPerformance(_appData.performance);
+  if (tabId === 't1') {
+    renderPerformance(_appData.performance);
+    renderSegment(_appData.segment);
+    renderAssetStack(_appData.performance);
+    renderLiabilityStack(_appData.performance);
+  }
   if (tabId === 't2') renderAttribution(_appData.attribution);
   if (tabId === 't3') renderRisk(_appData.risk);
   if (tabId === 't4') renderValuation(_appData.valuation);
@@ -1392,6 +1462,107 @@ function renderCashMatch(divId, xl, a, b, nameA, nameB) {
     margin:{t:10,r:20,b:36,l:44},
     yaxis:{title:'亿元', gridcolor:'#F0F2F4'},
     legend:{orientation:'h', y:-0.22, font:{size:10}},
+  }, PLOTLY_CFG);
+}
+
+// ── Part C：主营业务构成 ──────────────────────────────────
+const SEG_COLORS = ['#0B6E5D','#C07B12','#1A5FAD','#6D3DB2','#B23A2E','#A0AAB4','#2E86AB','#D4A017'];
+
+function renderSegment(seg) {
+  if (!seg || !seg.periods || !seg.periods.length) return;
+  const years = seg.periods.slice().reverse();
+
+  // 收集所有业务线名称
+  const names = [];
+  const seen = new Set();
+  for (const yr of years) {
+    for (const s of (seg.by_year[yr] || [])) {
+      if (!seen.has(s.name)) { seen.add(s.name); names.push(s.name); }
+    }
+  }
+
+  // 构建 traces
+  const revTraces = names.map((nm, i) => ({
+    name: nm, type: 'bar', x: years,
+    y: years.map(yr => {
+      const it = (seg.by_year[yr] || []).find(s => s.name === nm);
+      return it && it.revenue != null ? +(it.revenue / 1e8).toFixed(2) : null;
+    }),
+    marker: {color: SEG_COLORS[i % SEG_COLORS.length]},
+  }));
+  Plotly.newPlot('ch-seg-rev', revTraces, {
+    ...LAYOUT_BASE, barmode: 'group',
+    yaxis: {title: '亿元', gridcolor: '#F0F2F4'},
+    legend: {orientation: 'h', y: -0.22, font: {size: 10}},
+  }, PLOTLY_CFG);
+
+  // 毛利率折线图
+  const gmTraces = names.map((nm, i) => ({
+    name: nm, type: 'scatter', mode: 'lines+markers', x: years,
+    y: years.map(yr => {
+      const it = (seg.by_year[yr] || []).find(s => s.name === nm);
+      return it && it.gross_margin != null ? +it.gross_margin.toFixed(1) : null;
+    }),
+    line: {color: SEG_COLORS[i % SEG_COLORS.length], width: 2.5},
+    marker: {size: 6},
+  }));
+  Plotly.newPlot('ch-seg-gm', gmTraces, {
+    ...LAYOUT_BASE,
+    yaxis: {title: '%', gridcolor: '#F0F2F4', ticksuffix: '%'},
+    legend: {orientation: 'h', y: -0.22, font: {size: 10}},
+  }, PLOTLY_CFG);
+
+  // 营业成本柱状图
+  const costTraces = names.map((nm, i) => ({
+    name: nm, type: 'bar', x: years,
+    y: years.map(yr => {
+      const it = (seg.by_year[yr] || []).find(s => s.name === nm);
+      return it && it.cost != null ? +(it.cost / 1e8).toFixed(2) : null;
+    }),
+    marker: {color: SEG_COLORS[i % SEG_COLORS.length]},
+  }));
+  Plotly.newPlot('ch-seg-cost', costTraces, {
+    ...LAYOUT_BASE, barmode: 'group',
+    yaxis: {title: '亿元', gridcolor: '#F0F2F4'},
+    legend: {orientation: 'h', y: -0.22, font: {size: 10}},
+  }, PLOTLY_CFG);
+}
+
+// ── Part D：资产堆积图 ──────────────────────────────────
+function renderAssetStack(perf) {
+  const as = perf && perf.asset_stack;
+  if (!as || !as.periods || !as.periods.length) return;
+  const xl = as.periods.map(fmtPeriod).reverse();
+  const items = as.items;
+  const COLORS = ['#0B6E5D','#C07B12','#1A5FAD','#6D3DB2','#B23A2E'];
+  const traces = Object.keys(items).map((name, i) => ({
+    name, type: 'bar', x: xl,
+    y: items[name].slice().reverse().map(yi),
+    marker: {color: COLORS[i % COLORS.length]},
+  }));
+  Plotly.newPlot('ch-asset-stack', traces, {
+    ...LAYOUT_BASE, barmode: 'stack',
+    yaxis: {title: '亿元', gridcolor: '#F0F2F4'},
+    legend: {orientation: 'h', y: -0.22, font: {size: 10}},
+  }, PLOTLY_CFG);
+}
+
+// ── Part E：负债堆积图 ──────────────────────────────────
+function renderLiabilityStack(perf) {
+  const ls = perf && perf.liability_stack;
+  if (!ls || !ls.periods || !ls.periods.length) return;
+  const xl = ls.periods.map(fmtPeriod).reverse();
+  const items = ls.items;
+  const COLORS = ['#B23A2E','#C07B12','#6D3DB2','#1A5FAD','#0B6E5D'];
+  const traces = Object.keys(items).map((name, i) => ({
+    name, type: 'bar', x: xl,
+    y: items[name].slice().reverse().map(yi),
+    marker: {color: COLORS[i % COLORS.length]},
+  }));
+  Plotly.newPlot('ch-liab-stack', traces, {
+    ...LAYOUT_BASE, barmode: 'stack',
+    yaxis: {title: '亿元', gridcolor: '#F0F2F4'},
+    legend: {orientation: 'h', y: -0.22, font: {size: 10}},
   }, PLOTLY_CFG);
 }
 

@@ -1,5 +1,5 @@
 flask
-akshare
 pandas
 requests
-gunicorn
+lxml
+akshare

@@ -4,6 +4,28 @@
 
 ---
 
+## [app_V4.2] — 2026-06-13
+
+### 改进
+
+- **回归 AKShare 数据源**：所有数据接口统一回归 akshare，移除直接 HTTP API 调用（东方财富 push2、腾讯财经、新浪日线等），代码更简洁可维护
+- **PE/PB 历史图表修复**：改用 `ak.stock_zh_a_daily()`（新浪源）替代被代理阻断的 `ak.stock_zh_a_hist()`（东财源），手动重采样为月线，PE/PB 图表正常显示
+- **行业信息获取**：从东财 push2 API 改回 `ak.stock_individual_info_em()`
+- **股价获取**：从三源链式调用改回 `ak.stock_zh_a_daily()` + `ak.stock_individual_info_em()` 备用
+
+### 移除
+
+- **云端部署相关文件**：删除 `render.yaml`、`index.html`（独立前端）、`scf_bootstrap`、`serverless.yml` 等部署配置，项目回归纯本地运行
+- **冗余价格函数**：移除 `_daily_to_monthly`、`_fetch_prices_eastmoney`、`_fetch_prices_tencent`、`_fetch_prices_sina`
+- **调试接口**：移除 `/api/debug_sina`、`/api/_debug_price`、`/api/health` 等临时端点
+
+### 修复
+
+- PE/PB 图表空白（`ak.stock_zh_a_hist` 走东财 push2his 被代理阻断）→ 改用 `ak.stock_zh_a_daily`（新浪源）
+- `requirements.txt` 补回 `akshare` 依赖
+
+---
+
 ## [app_V4.1] — 2026-06-12
 
 ### 新增
