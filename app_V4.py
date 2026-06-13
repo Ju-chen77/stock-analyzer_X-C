@@ -464,63 +464,73 @@ def compute_risk(raw):
 # ═══════════════════════════════════════════════════════════════
 # 第四段：PE / PB 估值
 # ═══════════════════════════════════════════════════════════════
-def _get_pe_history(code):
+def _get_pe_history(code, raw):
     """
     用月线收盘价 + 年报 EPS/BVPS 本地计算历史 PE/PB 序列。
-    每月 PE = 当月收盘价 / 最近一期年报 EPS（TTM 近似）
-    每月 PB = 当月收盘价 / 最近一期年报 BVPS
-    Returns: DataFrame with columns [date, pe, pb]，日期为纯数字字符串 YYYYMMDD
+    每月 PE = 当月收盘价 / 最近一期年报 EPS
+    每月 PB = 当月收盘价 / 最近一期年报 BVPS（= 归母权益 / 股本）
+
+    全程只用新浪数据源（日线 + 三报表），不依赖东财/同花顺接口，
+    因为后者在境外服务器（Render）上会被拦截返回空。
+
+    Args:
+        code: 6 位股票代码
+        raw:  fetch_raw() 返回的三报表 dict（已含 _date 列）
+    Returns: DataFrame with columns [date, pe, pb]，日期为 YYYYMMDD 字符串
     """
     try:
-        # 月线价格（不复权，用于 PE 计算）
-        price_df = ak.stock_zh_a_hist(
-            symbol=code, period="monthly",
-            start_date="20190101", adjust=""
-        )
-        if price_df is None or price_df.empty:
+        # 月线价格：取新浪日线后重采样为月末收盘
+        daily = ak.stock_zh_a_daily(symbol=to_sina_code(code), adjust="")
+        if daily is None or daily.empty or "close" not in daily.columns:
             return None
-        price_df = price_df.rename(columns={"日期": "date", "收盘": "close"})
-        price_df["date"] = price_df["date"].astype(str).str.replace("-", "", regex=False).str[:8]
-        price_df = price_df[["date", "close"]].dropna()
+        daily = daily[["date", "close"]].copy()
+        daily["date"] = pd.to_datetime(daily["date"], errors="coerce")
+        daily = daily.dropna(subset=["date"])
+        monthly = daily.set_index("date").resample("ME")["close"].last().reset_index()
+        monthly = monthly[monthly["date"] >= pd.Timestamp("2019-01-01")]
+        monthly["date"] = monthly["date"].dt.strftime("%Y%m%d")
+        price_df = monthly.dropna()
     except Exception as e:
-        print(f"[ERR] 月线价格: {e}")
+        print(f"[ERR] 新浪日线->月线: {e}")
         return None
 
-    try:
-        # 财务指标（含 EPS 和 BVPS）—— 用同花顺接口，境外服务器可访问
-        ind_df = ak.stock_financial_abstract_ths(symbol=code, indicator="按年度")
-        if ind_df is None or ind_df.empty:
-            return None
-        # 报告期列为年份字符串如 "2023"，转成 YYYYMMDD 格式
-        ind_df["_d"] = ind_df["报告期"].astype(str).str.strip() + "1231"
-        eps_col  = "基本每股收益"
-        bvps_col = "每股净资产"
-        if eps_col not in ind_df.columns:
-            return None
-        ann = ind_df[["_d", eps_col, bvps_col]].copy()
-        # 数值列可能带单位（如 "1.23亿"），先去掉非数字字符
-        for c in [eps_col, bvps_col]:
-            ann[c] = ann[c].astype(str).str.replace(r"[^\d.\-]", "", regex=True)
-            ann[c] = pd.to_numeric(ann[c], errors="coerce")
-        ann = ann.sort_values("_d")
-    except Exception as e:
-        print(f"[ERR] 财务指标: {e}")
+    # 年报 EPS / BVPS：从已加载的新浪三报表里取，避免再调被拦的接口
+    income  = raw.get("income")
+    balance = raw.get("balance")
+    if income is None or balance is None:
         return None
 
-    # 对每个月，找对应的最近一期年报 EPS/BVPS
+    periods = annual_periods(income, n=10)  # 降序的 1231 期
+    if not periods:
+        return None
+
+    eps_col    = fcol(income, "基本每股收益", "稀释每股收益")
+    shares_col = fcol(balance, "实收资本(或股本)", "实收资本", "股本")
+    eps_vals    = col_vals(income, eps_col, periods) if eps_col else [None] * len(periods)
+    equity_vals = _get_equity(balance, periods)
+    share_vals  = col_vals(balance, shares_col, periods) if shares_col else [None] * len(periods)
+
+    ann_rows = []
+    for d, eps, eq, sh in zip(periods, eps_vals, equity_vals, share_vals):
+        bvps = sdiv(eq, sh) if (eq is not None and sh) else None
+        ann_rows.append({"_d": d, "eps": eps, "bvps": bvps})
+    ann = pd.DataFrame(ann_rows).sort_values("_d")
+    if ann.empty:
+        return None
+
+    # 对每个月，匹配 <= 当月的最近一期年报
     rows = []
     for _, row in price_df.iterrows():
         d     = row["date"]
         close = sf(row["close"])
         if close is None or close <= 0:
             continue
-        # 找 <= 当月的最新年报
         past = ann[ann["_d"] <= d]
         if past.empty:
             continue
-        last    = past.iloc[-1]
-        eps_val = sf(last[eps_col])
-        bvps_val= sf(last[bvps_col])
+        last     = past.iloc[-1]
+        eps_val  = sf(last["eps"])
+        bvps_val = sf(last["bvps"])
         pe = sdiv(close, eps_val)  if (eps_val  and eps_val  > 0) else None
         pb = sdiv(close, bvps_val) if (bvps_val and bvps_val > 0) else None
         rows.append({"date": d, "pe": pe, "pb": pb})
@@ -544,7 +554,7 @@ def compute_valuation(code, raw, price):
         return {}
 
     # ── 历史 PE/PB 序列 ────────────────────────────────────
-    pe_hist_df = _get_pe_history(code)
+    pe_hist_df = _get_pe_history(code, raw)
 
     dates, pe_series, pb_series = [], [], []
     pe_current = pb_current = pe_median = pb_median = pe_pct = pb_pct = None
@@ -705,16 +715,75 @@ def fetch_price(code):
 # ═══════════════════════════════════════════════════════════════
 # 搜索
 # ═══════════════════════════════════════════════════════════════
+_SINA_HEADERS = {"Referer": "https://finance.sina.com.cn"}
+
+def _sina_name(code):
+    """用新浪实时行情接口取股票名称（境外服务器可访问）。返回名称或 None。"""
+    try:
+        import requests as _req
+        r = _req.get(f"https://hq.sinajs.cn/list={to_sina_code(code)}",
+                     headers=_SINA_HEADERS, timeout=8)
+        r.encoding = "gbk"
+        body = r.text.split('"')
+        if len(body) > 1 and body[1]:
+            name = body[1].split(",")[0].strip()
+            return name or None
+    except Exception:
+        pass
+    return None
+
+
+def _sina_suggest(keyword, limit=12):
+    """
+    用新浪搜索建议接口做名称/代码模糊搜索（境外服务器可访问）。
+    返回 [{code, name}]，仅保留沪深 A 股（sh/sz + 6 位代码）。
+    """
+    try:
+        import requests as _req
+        r = _req.get(f"https://suggest3.sinajs.cn/suggest/type=11,12&key={keyword}",
+                     headers=_SINA_HEADERS, timeout=8)
+        r.encoding = "gbk"
+        raw = r.text.split('"')[1] if '"' in r.text else ""
+    except Exception:
+        return []
+
+    out, seen = [], set()
+    for item in raw.split(";"):
+        f = item.split(",")
+        if len(f) < 4:
+            continue
+        name, code, sina_code = f[0].strip(), f[2].strip(), f[3].strip()
+        if not (sina_code[:2] in ("sh", "sz") and code.isdigit() and len(code) == 6):
+            continue
+        # field[0] 在纯代码查询时是 sina_code，此时回查名称
+        disp = name if not name.startswith(("sh", "sz")) else (_sina_name(code) or code)
+        if code in seen:
+            continue
+        seen.add(code)
+        out.append({"code": code, "name": disp})
+        if len(out) >= limit:
+            break
+    return out
+
+
 def search_stocks(query, limit=12):
     q = query.strip()
     if not q:
         return []
-    if _CODE_NAME.empty:
-        return [{"code": q.zfill(6), "name": q}] if q.isdigit() else []
-    df = _CODE_NAME
-    hits = df[df["code"].astype(str).str.contains(q)] if q.isdigit() \
-        else df[df["name"].astype(str).str.contains(q, na=False)]
-    return [{"code": str(r["code"]), "name": str(r["name"])} for _, r in hits.head(limit).iterrows()]
+    # 优先走新浪 suggest（实时、境外可达）
+    hits = _sina_suggest(q, limit)
+    if hits:
+        return hits
+    # 兜底：本地代码名称表（若启动时加载成功）
+    if not _CODE_NAME.empty:
+        df = _CODE_NAME
+        m = df[df["code"].astype(str).str.contains(q)] if q.isdigit() \
+            else df[df["name"].astype(str).str.contains(q, na=False)]
+        if not m.empty:
+            return [{"code": str(r["code"]), "name": str(r["name"])}
+                    for _, r in m.head(limit).iterrows()]
+    # 最后兜底：纯数字代码直接放行
+    return [{"code": q.zfill(6), "name": q}] if q.isdigit() else []
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -735,6 +804,10 @@ def api_analyze():
     hit = _CODE_NAME[_CODE_NAME["code"].astype(str) == code]
     if not hit.empty:
         name = str(hit.iloc[0]["name"])
+
+    # 名称：优先新浪行情接口（境外可达），失败再退东财
+    if name == code:
+        name = _sina_name(code) or code
 
     try:
         secid = f"1.{code}" if code.startswith(("6", "9")) else f"0.{code}"
