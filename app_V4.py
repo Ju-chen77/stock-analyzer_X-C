@@ -294,6 +294,16 @@ def compute_performance(raw):
         cost_c   = col_vals(income, cost_col,   common)
         profit_c = col_vals(income, profit_col, common)
 
+        # 累计 NIO vs CFO（判断财务造假）
+        cum_profit = []
+        cum_ocf    = []
+        sp, so = 0, 0
+        for p, o in zip(reversed(profit_c), reversed(ocf)):
+            sp += p if p else 0
+            so += o if o else 0
+            cum_profit.append(sp)
+            cum_ocf.append(so)
+
         cash_match = {
             "periods":       common,
             "revenue":       rev_c,
@@ -302,6 +312,8 @@ def compute_performance(raw):
             "purchase_cash": purchase_cash,
             "net_profit":    profit_c,
             "ocf":           ocf,
+            "cum_profit":    list(reversed(cum_profit)),
+            "cum_ocf":       list(reversed(cum_ocf)),
         }
 
     # ── Part D / E：资产 & 负债堆积图 ──────────────────────
@@ -309,19 +321,34 @@ def compute_performance(raw):
     liability_stack = {}
     if balance is not None:
         bs_periods = annual_periods(balance, 6)
-        # 资产项
-        asset_items = [
-            ("货币资金",         "货币资金"),
-            ("存货",             "存货"),
-            ("应收票据及应收账款", "应收票据及应收账款", "应收账款"),
-            ("合同资产",         "合同资产"),
-            ("预付款项",         "预付款项"),
-        ]
-        asset_data = {}
-        for item_def in asset_items:
-            label = item_def[0]
-            col = fcol(balance, *item_def[1:])
-            asset_data[label] = col_vals(balance, col, bs_periods)
+        # 资产项（参考面积堆积图分类）
+        def _sum_cols(df, periods, *col_keys):
+            """多列求和"""
+            result = [0.0] * len(periods)
+            for ck in col_keys:
+                c = fcol(df, ck)
+                vals = col_vals(df, c, periods)
+                for i, v in enumerate(vals):
+                    if v is not None:
+                        result[i] += v
+            return [v if v != 0 else None for v in result]
+
+        asset_data = {
+            "固定资产+在建工程": _sum_cols(balance, bs_periods,
+                "固定资产", "在建工程"),
+            "长期股权投资": col_vals(balance,
+                fcol(balance, "长期股权投资"), bs_periods),
+            "应收类资产": _sum_cols(balance, bs_periods,
+                "应收票据及应收账款", "应收账款", "其他应收款"),
+            "商誉+无形资产": _sum_cols(balance, bs_periods,
+                "商誉", "无形资产"),
+            "现金类资产": _sum_cols(balance, bs_periods,
+                "货币资金", "交易性金融资产"),
+            "存货": col_vals(balance,
+                fcol(balance, "存货"), bs_periods),
+            "预付类资产": _sum_cols(balance, bs_periods,
+                "预付款项", "合同资产"),
+        }
         asset_stack = {"periods": bs_periods, "items": asset_data}
 
         # 负债项
@@ -924,5 +951,5 @@ def index():
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=(port == 5000))
+    port = int(os.environ.get("PORT", 5001))
+    app.run(host="0.0.0.0", port=port, debug=True)

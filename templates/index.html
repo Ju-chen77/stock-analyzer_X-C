@@ -214,6 +214,11 @@ footer{width:100%;max-width:980px;margin:0 auto;font-family:var(--mono);font-siz
         <div id="ch-cm3" style="height:240px"></div>
         <div class="chart-note">健康：经营现金流 ≥ 净利润</div>
       </div>
+      <div class="chart-wrap">
+        <div class="chart-title">④ 累计净利润 vs 累计经营现金流</div>
+        <div id="ch-cum-nio" style="height:260px"></div>
+        <div class="chart-note">累计 CFO 长期低于累计净利润 → 利润"赚到纸上"，可能存在财务造假风险</div>
+      </div>
 
       <p class="sec-label" style="margin-top:24px">Part C · 主营业务构成（按产品）</p>
       <div class="chart-wrap">
@@ -233,7 +238,7 @@ footer{width:100%;max-width:980px;margin:0 auto;font-family:var(--mono);font-siz
       <div class="chart-wrap">
         <div class="chart-title">主要资产项目构成（亿元）</div>
         <div id="ch-asset-stack" style="height:300px"></div>
-        <div class="chart-note">货币资金、存货、应收票据及应收账款、合同资产、预付款项</div>
+        <div class="chart-note">固定资产+在建工程、长期股权投资、应收类资产、商誉+无形资产、现金类资产、存货、预付类资产</div>
       </div>
 
       <p class="sec-label" style="margin-top:24px">Part E · 历年负债结构堆积图</p>
@@ -489,7 +494,8 @@ function renderPerformance(perf) {
     ...LAYOUT_BASE,
     barmode:'group',
     yaxis: {title:'亿元', gridcolor:'#F0F2F4'},
-    yaxis2:{title:'增速 %', overlaying:'y', side:'right', showgrid:false, ticksuffix:'%'},
+    yaxis2:{overlaying:'y', side:'right', showgrid:false, ticksuffix:'%'},
+    margin:{t:10, r:50, b:36, l:52},
   }, PLOTLY_CFG);
 
   Plotly.newPlot('ch-margins', [
@@ -516,6 +522,25 @@ function renderPerformance(perf) {
     renderCashMatch('ch-cm3', xl,
       cm.net_profit.map(yi), cm.ocf.map(yi),
       '净利润', '经营现金流');
+
+    // 累计 NIO vs CFO
+    if (cm.cum_profit && cm.cum_ocf) {
+      const cp = cm.cum_profit.map(yi);
+      const co = cm.cum_ocf.map(yi);
+      Plotly.newPlot('ch-cum-nio', [
+        {name:'累计净利润', type:'scatter', mode:'lines+markers', x:xl, y:cp,
+          line:{color:C.amber,width:2.5}, marker:{size:5},
+          fill:'tozeroy', fillcolor:'rgba(192,123,18,.12)'},
+        {name:'累计经营现金流', type:'scatter', mode:'lines+markers', x:xl, y:co,
+          line:{color:C.teal,width:2.5}, marker:{size:5},
+          fill:'tozeroy', fillcolor:'rgba(11,110,93,.12)'},
+      ], {
+        ...LAYOUT_BASE,
+        margin:{t:10,r:20,b:36,l:52},
+        yaxis:{title:'亿元', gridcolor:'#F0F2F4'},
+        legend:{orientation:'h', y:-0.2, font:{size:11}},
+      }, PLOTLY_CFG);
+    }
   }
 }
 
@@ -592,41 +617,49 @@ function renderSegment(seg) {
   }, PLOTLY_CFG);
 }
 
-// ── Part D：资产堆积图 ──────────────────────────────────
+// ── Part D：资产堆积面积图 ────────────────────────────────
 function renderAssetStack(perf) {
   const as = perf && perf.asset_stack;
   if (!as || !as.periods || !as.periods.length) return;
   const xl = as.periods.map(fmtPeriod).reverse();
   const items = as.items;
-  const COLORS = ['#0B6E5D','#C07B12','#1A5FAD','#6D3DB2','#B23A2E'];
-  const traces = Object.keys(items).map((name, i) => ({
-    name, type: 'bar', x: xl,
+  const COLORS = ['#E74C3C','#8BC34A','#42A5F5','#AB47BC','#FFA726','#26A69A','#3F51B5'];
+  const keys = Object.keys(items);
+  const traces = keys.map((name, i) => ({
+    name, type: 'scatter', mode: 'lines', x: xl,
     y: items[name].slice().reverse().map(yi),
-    marker: {color: COLORS[i % COLORS.length]},
+    stackgroup: 'one',
+    line: {width: 0.5, color: COLORS[i % COLORS.length]},
+    fillcolor: COLORS[i % COLORS.length],
   }));
   Plotly.newPlot('ch-asset-stack', traces, {
-    ...LAYOUT_BASE, barmode: 'stack',
+    ...LAYOUT_BASE,
     yaxis: {title: '亿元', gridcolor: '#F0F2F4'},
-    legend: {orientation: 'h', y: -0.22, font: {size: 10}},
+    legend: {orientation: 'h', y: -0.25, font: {size: 10}},
+    margin: {t:10, r:10, b:50, l:52},
   }, PLOTLY_CFG);
 }
 
-// ── Part E：负债堆积图 ──────────────────────────────────
+// ── Part E：负债堆积面积图 ────────────────────────────────
 function renderLiabilityStack(perf) {
   const ls = perf && perf.liability_stack;
   if (!ls || !ls.periods || !ls.periods.length) return;
   const xl = ls.periods.map(fmtPeriod).reverse();
   const items = ls.items;
-  const COLORS = ['#B23A2E','#C07B12','#6D3DB2','#1A5FAD','#0B6E5D'];
-  const traces = Object.keys(items).map((name, i) => ({
-    name, type: 'bar', x: xl,
+  const COLORS = ['#E74C3C','#FFA726','#AB47BC','#42A5F5','#26A69A'];
+  const keys = Object.keys(items);
+  const traces = keys.map((name, i) => ({
+    name, type: 'scatter', mode: 'lines', x: xl,
     y: items[name].slice().reverse().map(yi),
-    marker: {color: COLORS[i % COLORS.length]},
+    stackgroup: 'one',
+    line: {width: 0.5, color: COLORS[i % COLORS.length]},
+    fillcolor: COLORS[i % COLORS.length],
   }));
   Plotly.newPlot('ch-liab-stack', traces, {
-    ...LAYOUT_BASE, barmode: 'stack',
+    ...LAYOUT_BASE,
     yaxis: {title: '亿元', gridcolor: '#F0F2F4'},
-    legend: {orientation: 'h', y: -0.22, font: {size: 10}},
+    legend: {orientation: 'h', y: -0.25, font: {size: 10}},
+    margin: {t:10, r:10, b:50, l:52},
   }, PLOTLY_CFG);
 }
 
@@ -652,7 +685,8 @@ function renderAttribution(attr) {
   ], {
     ...LAYOUT_BASE,
     yaxis: {title:'% 或 ×', gridcolor:'#F0F2F4'},
-    yaxis2:{title:'总资产周转（×）', overlaying:'y', side:'right', showgrid:false},
+    yaxis2:{overlaying:'y', side:'right', showgrid:false},
+    margin:{t:10, r:50, b:36, l:52},
   }, PLOTLY_CFG);
 
   const rows = xl.map((yr, i) => [
