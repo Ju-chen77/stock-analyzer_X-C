@@ -216,3 +216,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Claude Code 本地工具配置（dev 预览服务器等）
+.claude/
