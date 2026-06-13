@@ -570,114 +570,255 @@ def _traffic(value, green_thr, yellow_thr, higher_is_better=True):
 
 def compute_risk(raw):
     """
-    五项排雷指标 + 应收/存货增速趋势辅助图
-    Returns: dict {dashboard, trend_periods, ar_yoy, inv_yoy, rev_yoy}
+    验证排雷：两大维度（A 资产端 / B 偿债杠杆）× 红黄绿历史热力图 + 一票否决判定。
+    依据「验证排雷框架」，全部基于已抓取的三大报表结构化数据。
+    治理维度 C（质押/审计/监管）需额外数据源，留待后续接入。
+
+    Returns: dict {
+        verdict:    {level, label, red, yellow, green, summary},
+        dimensions: [{group, items:[{name, value, unit, status, desc, signal}]}],
+        heatmap:    {periods, rows:[{name, group, statuses, values}]},
+        trend_periods, rev_yoy, ar_yoy, inv_yoy
+    }
     """
     income   = raw.get("income")
     balance  = raw.get("balance")
     cashflow = raw.get("cashflow")
 
     if income is None or balance is None:
-        return {"dashboard": []}
+        return {"verdict": None, "dimensions": [], "heatmap": None}
 
     periods = annual_periods(income, 6)
     if not periods:
-        return {"dashboard": []}
+        return {"verdict": None, "dimensions": [], "heatmap": None}
 
-    # 提取各列
-    rev_col    = fcol(income,  "营业收入")
-    profit_col = fcol(income,  "归属于母公司所有者的净利润", "净利润")
-    ar_col     = fcol(balance, "应收账款")
-    inv_col    = fcol(balance, "存货")
-    gw_col     = fcol(balance, "商誉")
-    assets_col = fcol(balance, "资产总计")
-    liab_col   = fcol(balance, "负债合计")
+    n = len(periods)
 
-    revenue    = col_vals(income,  rev_col,    periods)
-    net_profit = col_vals(income,  profit_col, periods)
-    ar         = col_vals(balance, ar_col,     periods)
-    inventory  = col_vals(balance, inv_col,    periods)
-    goodwill   = col_vals(balance, gw_col,     periods)
-    assets     = col_vals(balance, assets_col, periods)
-    liabilities= col_vals(balance, liab_col,   periods)
-    equity     = _get_equity(balance, periods)
+    def bcol(*keys):
+        return col_vals(balance, fcol(balance, *keys), periods)
+    def icol(*keys):
+        return col_vals(income,  fcol(income,  *keys), periods)
+
+    # ── 原始科目（按 periods 降序，[0] 为最新） ──
+    revenue   = icol("营业收入")
+    fin_exp   = icol("财务费用")
+    int_exp   = icol("利息费用")
+    pretax    = icol("利润总额")
+    rd_exp    = icol("研发费用")
+
+    ar        = bcol("应收账款")
+    inventory = bcol("存货")
+    goodwill  = bcol("商誉")
+    oth_recv  = bcol("其他应收款(合计)", "其他应收款")
+    dev_exp   = bcol("开发支出")
+    cash      = bcol("货币资金")
+    st_loan   = bcol("短期借款")
+    lt_loan   = bcol("长期借款")
+    bond      = bcol("应付债券")
+    cur_due   = bcol("一年内到期的非流动负债")
+    cur_asset = bcol("流动资产合计")
+    cur_liab  = bcol("流动负债合计")
+    assets    = bcol("资产总计")
+    liab      = bcol("负债合计")
+    equity    = _get_equity(balance, periods)
 
     # OCF（对齐年报期）
-    ocf = [None] * len(periods)
+    ocf = [None] * n
     if cashflow is not None:
-        ocf_col = fcol(cashflow, "经营活动产生的现金流量净额", "经营活动产生")
-        if ocf_col:
-            cf_map = dict(zip(cashflow["_date"].astype(str).tolist(), cashflow[ocf_col].tolist()))
+        oc = fcol(cashflow, "经营活动产生的现金流量净额", "经营活动产生")
+        if oc:
+            cf_map = dict(zip(cashflow["_date"].astype(str).tolist(), cashflow[oc].tolist()))
             ocf = [sf(cf_map.get(p)) for p in periods]
 
-    dashboard = []
+    # 有息负债 = 短期借款 + 一年内到期非流动负债 + 长期借款 + 应付债券
+    def _isum(i, *lists):
+        vals = [l[i] for l in lists]
+        nn = [v for v in vals if v is not None]
+        return sum(nn) if nn else None
+    int_debt = [_isum(i, st_loan, cur_due, lt_loan, bond) for i in range(n)]
 
-    # ① 利润含金量
-    pcq = sdiv(ocf[0], net_profit[0]) if ocf and net_profit else None
-    dashboard.append({
-        "name":   "利润含金量",
-        "value":  round(pcq, 2) if pcq is not None else None,
-        "unit":   "×",
-        "status": _traffic(pcq, 0.8, 0.5, higher_is_better=True),
-        "desc":   "经营现金流 / 净利润",
-        "signal": "≥0.8 健康 ｜ 0.5–0.8 关注 ｜ <0.5 警示",
-    })
+    # 利息费用（用于覆盖率）：优先 利息费用，缺失用 财务费用
+    def _int(i):
+        if int_exp[i] not in (None, 0):
+            return int_exp[i]
+        return fin_exp[i]
 
-    # ② 收入质量：应收增速 − 营收增速
-    rev_yoy0 = sdiv(revenue[0] - revenue[1], abs(revenue[1])) if len(revenue) > 1 and revenue[0] and revenue[1] else None
-    ar_yoy0  = sdiv(ar[0] - ar[1],           abs(ar[1]))       if len(ar) > 1 and ar[0] and ar[1] else None
-    ar_gap   = (ar_yoy0 - rev_yoy0) if (ar_yoy0 is not None and rev_yoy0 is not None) else None
-    dashboard.append({
-        "name":   "收入质量",
-        "value":  round(ar_gap * 100, 1) if ar_gap is not None else None,
-        "unit":   "pp（应收增速−营收增速）",
-        "status": _traffic(ar_gap, 0.0, 0.1, higher_is_better=False) if ar_gap is not None else "grey",
-        "desc":   "应收账款增速 vs 营收增速差值",
-        "signal": "<0 健康 ｜ 0–10pp 关注 ｜ >10pp 警示",
-    })
+    # ── 趋势型指标：增速差（应收/存货 增速 − 营收增速），按年逐期 ──
+    def _yoy_gap(num, den):
+        g = [None] * n
+        for i in range(n - 1):
+            nu = sdiv(num[i] - num[i + 1], abs(num[i + 1])) if (num[i] is not None and num[i + 1] not in (None, 0)) else None
+            de = sdiv(den[i] - den[i + 1], abs(den[i + 1])) if (den[i] is not None and den[i + 1] not in (None, 0)) else None
+            if nu is not None and de is not None:
+                g[i] = nu - de
+        return g
 
-    # ③ 库存压力：存货增速 − 营收增速
-    inv_yoy0 = sdiv(inventory[0] - inventory[1], abs(inventory[1])) if len(inventory) > 1 and inventory[0] and inventory[1] else None
-    inv_gap  = (inv_yoy0 - rev_yoy0) if (inv_yoy0 is not None and rev_yoy0 is not None) else None
-    dashboard.append({
-        "name":   "库存压力",
-        "value":  round(inv_gap * 100, 1) if inv_gap is not None else None,
-        "unit":   "pp（存货增速−营收增速）",
-        "status": _traffic(inv_gap, 0.05, 0.15, higher_is_better=False) if inv_gap is not None else "grey",
-        "desc":   "存货增速 vs 营收增速差值",
-        "signal": "<5pp 健康 ｜ 5–15pp 关注 ｜ >15pp 警示",
-    })
+    rev_gap = _yoy_gap(ar, revenue)         # 收入质量
+    inv_gap = _yoy_gap(inventory, revenue)  # 库存压力
 
-    # ④ 商誉风险：商誉 / 净资产
-    gw_ratio = sdiv(goodwill[0], equity[0]) if goodwill[0] is not None and equity and equity[0] else None
-    dashboard.append({
-        "name":   "商誉风险",
-        "value":  round(gw_ratio * 100, 1) if gw_ratio is not None else None,
-        "unit":   "%（商誉 / 净资产）",
-        "status": _traffic(gw_ratio, 0.1, 0.3, higher_is_better=False) if gw_ratio is not None else "grey",
-        "desc":   "商誉 / 净资产",
-        "signal": "<10% 健康 ｜ 10–30% 关注 ｜ >30% 警示",
-    })
+    # ── 各指标按年序列 ──
+    gw_ratio  = [sdiv(goodwill[i], equity[i]) for i in range(n)]
+    oth_ratio = [sdiv(oth_recv[i], assets[i]) for i in range(n)]
+    # 研发资本化比例 = 本期资本化(Δ开发支出) /（研发费用 + 本期资本化）
+    # 开发支出是资产负债表余额（存量），需取同比增量近似当期资本化（流量）
+    cap_ratio = [None] * n
+    for i in range(n):
+        de_now  = dev_exp[i]
+        de_prev = dev_exp[i + 1] if i + 1 < n else None
+        if de_now is None:
+            cap_ratio[i] = 0.0 if rd_exp[i] is not None else None   # 无开发支出 → 全部费用化
+        elif de_prev is None:
+            cap_ratio[i] = None                                     # 最早一年无增量，无法计算
+        else:
+            delta = max(de_now - de_prev, 0.0)
+            denom = (rd_exp[i] or 0) + delta
+            cap_ratio[i] = (delta / denom) if denom else 0.0
+    dr        = [sdiv(liab[i], assets[i]) for i in range(n)]
+    idc       = [sdiv(int_debt[i], cash[i]) for i in range(n)]  # 有息/现金（康美红线）
+    quick     = [
+        sdiv((cur_asset[i] - inventory[i]) if (cur_asset[i] is not None and inventory[i] is not None) else None,
+             cur_liab[i])
+        for i in range(n)
+    ]
 
-    # ⑤ 偿债风险：资产负债率
-    dr = sdiv(liabilities[0], assets[0]) if liabilities and assets and liabilities[0] and assets[0] else None
-    dashboard.append({
-        "name":   "偿债风险",
-        "value":  round(dr * 100, 1) if dr is not None else None,
-        "unit":   "%（资产负债率）",
-        "status": _traffic(dr, 0.5, 0.7, higher_is_better=False),
-        "desc":   "负债合计 / 资产总计（制造/消费行业参考）",
-        "signal": "<50% 健康 ｜ 50–70% 关注 ｜ >70% 警示",
-    })
+    # 利息保障倍数 = EBIT / 利息费用；无有息负债视为绿灯
+    icr, icr_status = [], []
+    for i in range(n):
+        ie = _int(i)
+        if not int_debt[i]:                      # 无有息负债 → 偿债无压力
+            icr.append(None); icr_status.append("green")
+        elif ie in (None, 0):
+            icr.append(None); icr_status.append("grey")
+        else:
+            ebit = (pretax[i] or 0) + ie
+            v = ebit / ie
+            icr.append(v)
+            icr_status.append(_traffic(v, 3, 1, higher_is_better=True))
 
-    # 辅助趋势数据（应收 & 存货 & 营收增速，用于图表）
+    # 经营现金流 / 有息负债；无有息负债视为绿灯
+    ocf_debt, ocf_debt_status = [], []
+    for i in range(n):
+        if not int_debt[i]:
+            ocf_debt.append(None); ocf_debt_status.append("green")
+        else:
+            v = sdiv(ocf[i], int_debt[i])
+            ocf_debt.append(v)
+            ocf_debt_status.append(_traffic(v, 0.2, 0.1, higher_is_better=True)
+                                   if v is not None else "grey")
+
+    # ── 指标规格表（含每年状态序列，[0] 最新） ──
+    def _ss(vals, g, y, higher):
+        return [_traffic(v, g, y, higher) for v in vals]
+
+    SPECS = [
+        # A · 资产端
+        {"group": "资产端", "name": "商誉占比", "vals": gw_ratio,
+         "status_series": _ss(gw_ratio, 0.30, 0.50, False),
+         "fmt": "pct", "unit": "商誉 / 净资产",
+         "signal": "<30% 健康 ｜ 30–50% 关注 ｜ >50% 警示"},
+        {"group": "资产端", "name": "收入质量", "vals": rev_gap,
+         "status_series": [(_traffic(v, 0.0, 0.10, False) if v is not None else "grey") for v in rev_gap],
+         "fmt": "pp", "unit": "应收增速 − 营收增速",
+         "signal": "<0 健康 ｜ 0–10pp 关注 ｜ >10pp 警示"},
+        {"group": "资产端", "name": "库存压力", "vals": inv_gap,
+         "status_series": [(_traffic(v, 0.05, 0.15, False) if v is not None else "grey") for v in inv_gap],
+         "fmt": "pp", "unit": "存货增速 − 营收增速",
+         "signal": "<5pp 健康 ｜ 5–15pp 关注 ｜ >15pp 警示"},
+        {"group": "资产端", "name": "其他应收占比", "vals": oth_ratio,
+         "status_series": _ss(oth_ratio, 0.05, 0.10, False),
+         "fmt": "pct", "unit": "其他应收款 / 总资产",
+         "signal": "<5% 健康 ｜ 5–10% 关注 ｜ >10% 警示（资金占用高发区）"},
+        {"group": "资产端", "name": "研发资本化", "vals": cap_ratio,
+         "status_series": [(_traffic(v, 0.10, 0.30, False) if v is not None else "grey") for v in cap_ratio],
+         "fmt": "pct", "unit": "Δ开发支出 /（研发费用+Δ开发支出）",
+         "signal": "<10% 健康 ｜ 10–30% 关注 ｜ >30% 警示（过度资本化虚增利润）"},
+        # B · 偿债与杠杆
+        {"group": "偿债与杠杆", "name": "资产负债率", "vals": dr,
+         "status_series": _ss(dr, 0.50, 0.70, False),
+         "fmt": "pct", "unit": "负债合计 / 总资产",
+         "signal": "<50% 健康 ｜ 50–70% 关注 ｜ >70% 警示（行业差异大）"},
+        {"group": "偿债与杠杆", "name": "有息负债/货币资金", "vals": idc,
+         "status_series": _ss(idc, 1.0, 2.0, False),
+         "fmt": "x", "unit": "有息负债 / 货币资金",
+         "signal": "<1.0 健康 ｜ 1.0–2.0 关注 ｜ >2.0 警示（康美/康得新造假信号）"},
+        {"group": "偿债与杠杆", "name": "速动比率", "vals": quick,
+         "status_series": _ss(quick, 1.0, 0.5, True),
+         "fmt": "x", "unit": "(流动资产−存货) / 流动负债",
+         "signal": ">1.0 健康 ｜ 0.5–1.0 关注 ｜ <0.5 警示"},
+        {"group": "偿债与杠杆", "name": "利息保障倍数", "vals": icr,
+         "status_series": icr_status,
+         "fmt": "x", "unit": "EBIT / 利息费用",
+         "signal": ">3 健康 ｜ 1–3 关注 ｜ <1 危险（无有息负债视为健康）"},
+        {"group": "偿债与杠杆", "name": "现金流偿债覆盖", "vals": ocf_debt,
+         "status_series": ocf_debt_status,
+         "fmt": "x", "unit": "经营现金流 / 有息负债",
+         "signal": ">0.2 健康 ｜ 0.1–0.2 关注 ｜ <0.1 警示"},
+    ]
+
+    def _disp(v, fmt):
+        if v is None:
+            return None
+        if fmt == "pct":
+            return round(v * 100, 1)
+        if fmt == "pp":
+            return round(v * 100, 1)
+        return round(v, 2)  # x
+
+    # ── 维度分组（取最新期状态/值用于卡片） ──
+    groups = {"资产端": [], "偿债与杠杆": []}
+    for s in SPECS:
+        groups[s["group"]].append({
+            "name":   s["name"],
+            "value":  _disp(s["vals"][0], s["fmt"]),
+            "unit":   ("%（" + s["unit"] + "）") if s["fmt"] in ("pct", "pp")
+                      else ("×（" + s["unit"] + "）"),
+            "status": s["status_series"][0],
+            "desc":   s["unit"],
+            "signal": s["signal"],
+        })
+    dimensions = [
+        {"group": "A · 资产端",     "items": groups["资产端"]},
+        {"group": "B · 偿债与杠杆", "items": groups["偿债与杠杆"]},
+    ]
+
+    # ── 一票否决判定（基于最新期） ──
+    latest = [s["status_series"][0] for s in SPECS]
+    red    = latest.count("red")
+    yellow = latest.count("yellow")
+    green  = latest.count("green")
+    if red >= 1:
+        level, label, summary = "FAIL", "不通过", f"{red} 项红灯 → 红灯一票否决，估值结果作废，标的剔除"
+    elif yellow >= 3:
+        level, label, summary = "WARNING", "警示", f"{yellow} 项黄灯 → 估值结果打折，标记观察"
+    elif green == len(latest):
+        level, label, summary = "PREMIUM", "优质", "全部绿灯 → 优先纳入候选池"
+    else:
+        level, label, summary = "PASS", "通过", "无红灯、黄灯 ≤2 → 可进入估值流程"
+    verdict = {"level": level, "label": label,
+               "red": red, "yellow": yellow, "green": green, "summary": summary}
+
+    # ── 历史热力图（年份升序，左→右；状态/值同序） ──
+    pasc = list(reversed(periods))
+    heatmap = {
+        "periods": pasc,
+        "rows": [{
+            "name":     s["name"],
+            "group":    s["group"],
+            "statuses": list(reversed(s["status_series"])),
+            "values":   [_disp(v, s["fmt"]) for v in reversed(s["vals"])],
+        } for s in SPECS],
+    }
+
+    # ── 辅助趋势数据（应收/存货 vs 营收增速柱状图） ──
     trend_periods = periods[:-1]
     rev_yoys = yoy_list(revenue)[:-1]
     ar_yoys  = yoy_list(ar)[:-1]
     inv_yoys = yoy_list(inventory)[:-1]
 
     return {
-        "dashboard":      dashboard,
+        "verdict":        verdict,
+        "dimensions":     dimensions,
+        "heatmap":        heatmap,
         "trend_periods":  trend_periods,
         "rev_yoy":        rev_yoys,
         "ar_yoy":         ar_yoys,

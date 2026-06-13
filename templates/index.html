@@ -145,6 +145,10 @@ h1{font-family:var(--display);font-weight:700;font-size:clamp(36px,7vw,56px);
 .contrib-label{font-size:12px;color:var(--muted);margin-bottom:2px}
 .contrib-val{font-family:var(--mono);font-size:18px;font-weight:600}
 
+/* ── 排雷总判定卡片 ── */
+.risk-verdict-card{border-radius:6px;padding:18px 22px;margin-bottom:8px}
+.risk-tally{font-family:var(--mono);font-size:14px;color:var(--ink);margin-left:auto}
+
 /* ── 现金流验证卡片 ── */
 .cf-check-card{background:var(--surface);border:1px solid var(--line);
   border-radius:6px;padding:14px 16px;text-align:center}
@@ -302,10 +306,30 @@ footer{width:100%;max-width:980px;margin:0 auto;font-family:var(--mono);font-siz
 
     <!-- ── Tab 3：验证排雷 ── -->
     <div class="tab-panel" id="t3">
-      <p class="sec-label">排雷仪表盘 · 红黄绿三色标注当前状态</p>
-      <div class="dashboard-grid" id="dash-grid"></div>
 
-      <p class="sec-label" style="margin-top:8px">应收账款增速 vs 营收增速（历史趋势）</p>
+      <!-- 一票否决总判定 -->
+      <div id="risk-verdict" style="display:none"></div>
+
+      <!-- A · 资产端 / B · 偿债与杠杆 分组仪表盘 -->
+      <div id="risk-dimensions"></div>
+
+      <!-- D-3 红黄绿历史热力图 -->
+      <p class="sec-label" style="margin-top:32px">风险演变热力图 · 颜色随年份漂移看趋势</p>
+      <div class="chart-wrap">
+        <div class="chart-title">各指标历年红黄绿状态</div>
+        <div id="ch-heatmap" style="height:420px"></div>
+        <div class="chart-note">单年绿灯不算数，看颜色漂移方向；任一指标转红需警惕</div>
+      </div>
+
+      <!-- 行业差异化阈值提示 -->
+      <div class="chart-note" style="margin:4px 2px 24px;line-height:1.7">
+        ⚠️ <b>行业差异化阈值</b>：以上为制造/消费行业通用阈值，仅作初筛。
+        银行/保险（看拨备覆盖率、不良率）、房地产（存货周转&gt;1000天常态，看三道红线）、
+        证券（高杠杆常态）、周期股（底部 FCF 为负正常）需专门规则，请结合本股所属行业判断。
+        治理维度（股权质押 / 审计意见 / 监管函）需额外数据源，暂未接入。
+      </div>
+
+      <p class="sec-label">应收账款增速 vs 营收增速（历史趋势）</p>
       <div class="chart-wrap">
         <div class="chart-title">收入质量趋势</div>
         <div id="ch-ar" style="height:240px"></div>
@@ -884,20 +908,72 @@ function renderAttribution(attr) {
 function renderRisk(risk) {
   if (!risk) return;
 
-  const dash = risk.dashboard || [];
-  $('#dash-grid').innerHTML = dash.map(d => {
-    const valStr = d.value == null ? '—' : String(d.value);
-    return `<div class="dash-card ${d.status}">
-      <div class="d-head">
-        <span class="d-dot ${d.status}"></span>
-        <span class="d-name">${d.name}</span>
-      </div>
-      <div class="d-val">${valStr}</div>
-      <div class="d-unit">${d.unit}</div>
-      <div class="d-desc">${d.desc}</div>
-      <div class="d-signal">${d.signal}</div>
-    </div>`;
+  // ① 一票否决总判定
+  const v = risk.verdict;
+  if (v) {
+    const vColor = {PASS:'#0B6E5D', PREMIUM:'#0B6E5D', WARNING:'#C07B12', FAIL:'#B23A2E'};
+    const vBg    = {PASS:'#E0F0EB', PREMIUM:'#E0F0EB', WARNING:'#FBF3E0', FAIL:'#FBE7E4'};
+    const c = vColor[v.level] || '#A0AAB4';
+    const el = $('#risk-verdict');
+    el.style.display = 'block';
+    el.innerHTML = `
+      <div class="risk-verdict-card" style="border-left:5px solid ${c};background:${vBg[v.level]||'#fff'}">
+        <div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap">
+          <span style="font-size:13px;color:#6A7480">排雷总判定</span>
+          <span style="font-size:26px;font-weight:800;color:${c}">${v.label}</span>
+          <span class="risk-tally">🔴 ${v.red} ｜ 🟡 ${v.yellow} ｜ 🟢 ${v.green}</span>
+        </div>
+        <div style="margin-top:8px;color:#11151B;font-size:14px">${v.summary}</div>
+      </div>`;
+  }
+
+  // ② A / B 分组仪表盘
+  const dims = risk.dimensions || [];
+  $('#risk-dimensions').innerHTML = dims.map(dim => {
+    const cards = (dim.items || []).map(d => {
+      const valStr = d.value == null ? '—' : String(d.value);
+      return `<div class="dash-card ${d.status}">
+        <div class="d-head">
+          <span class="d-dot ${d.status}"></span>
+          <span class="d-name">${d.name}</span>
+        </div>
+        <div class="d-val">${valStr}</div>
+        <div class="d-unit">${d.unit}</div>
+        <div class="d-signal">${d.signal}</div>
+      </div>`;
+    }).join('');
+    return `<p class="sec-label" style="margin-top:20px">${dim.group}</p>
+            <div class="dashboard-grid">${cards}</div>`;
   }).join('');
+
+  // ③ 红黄绿历史热力图
+  const hm = risk.heatmap;
+  if (hm && hm.rows && hm.rows.length) {
+    const SMAP = {green:3, yellow:2, red:1, grey:0};
+    const STXT = {green:'🟢', yellow:'🟡', red:'🔴', grey:'·'};
+    const xl = hm.periods.map(fmtPeriod);
+    const rowsRev = hm.rows.slice().reverse();   // 顶部=资产端首项
+    const yl = rowsRev.map(r => r.name);
+    const z  = rowsRev.map(r => r.statuses.map(s => SMAP[s] ?? 0));
+    const txt = rowsRev.map(r => r.statuses.map(s => STXT[s] || ''));
+    Plotly.newPlot('ch-heatmap', [{
+      type:'heatmap', x:xl, y:yl, z:z,
+      text:txt, texttemplate:'%{text}', textfont:{size:15},
+      xgap:3, ygap:3,
+      colorscale:[
+        [0.0, '#EBEEF1'], [0.25, '#EBEEF1'],
+        [0.25,'#E8A09A'], [0.5, '#E8A09A'],
+        [0.5, '#E9C46A'], [0.75,'#E9C46A'],
+        [0.75,'#7EC8A0'], [1.0, '#7EC8A0'],
+      ],
+      zmin:0, zmax:3, showscale:false, hoverinfo:'y+x',
+    }], {
+      ...LAYOUT_BASE,
+      margin:{t:10, r:10, b:36, l:120},
+      yaxis:{automargin:true, tickfont:{size:12}},
+      xaxis:{side:'top', tickfont:{size:12}},
+    }, PLOTLY_CFG);
+  }
 
   const tp = (risk.trend_periods || []).map(fmtPeriod);
   const rvy = (risk.rev_yoy  || []).map(pct);
