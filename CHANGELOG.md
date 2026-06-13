@@ -6,6 +6,11 @@
 
 ## [app_V4.2] — 2026-06-13
 
+### 重构
+
+- **前端模板分离**：将 `app_V4.py` 中约 900 行内嵌 HTML/CSS/JS 提取为独立的 `templates/index.html`，Flask 改用 `render_template` + Jinja2 变量，`app_V4.py` 从 ~1828 行精简至 928 行
+- **GitHub Pages 落地页**：新增根目录 `index.html` 作为项目介绍页，展示功能特性与本地运行说明
+
 ### 改进
 
 - **回归 AKShare 数据源**：所有数据接口统一回归 akshare，移除直接 HTTP API 调用（东方财富 push2、腾讯财经、新浪日线等），代码更简洁可维护
