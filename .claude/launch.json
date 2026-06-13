@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "flask",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["app_V4.py"],
+      "port": 5000
+    }
+  ]
+}

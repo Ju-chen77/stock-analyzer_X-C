@@ -608,10 +608,8 @@ def compute_risk(raw):
 
     ar        = bcol("应收账款")
     inventory = bcol("存货")
-    goodwill  = bcol("商誉")
     oth_recv  = bcol("其他应收款(合计)", "其他应收款")
     dev_exp   = bcol("开发支出")
-    cash      = bcol("货币资金")
     st_loan   = bcol("短期借款")
     lt_loan   = bcol("长期借款")
     bond      = bcol("应付债券")
@@ -657,7 +655,6 @@ def compute_risk(raw):
     inv_gap = _yoy_gap(inventory, revenue)  # 库存压力
 
     # ── 各指标按年序列 ──
-    gw_ratio  = [sdiv(goodwill[i], equity[i]) for i in range(n)]
     oth_ratio = [sdiv(oth_recv[i], assets[i]) for i in range(n)]
     # 研发资本化比例 = 本期资本化(Δ开发支出) /（研发费用 + 本期资本化）
     # 开发支出是资产负债表余额（存量），需取同比增量近似当期资本化（流量）
@@ -674,7 +671,6 @@ def compute_risk(raw):
             denom = (rd_exp[i] or 0) + delta
             cap_ratio[i] = (delta / denom) if denom else 0.0
     dr        = [sdiv(liab[i], assets[i]) for i in range(n)]
-    idc       = [sdiv(int_debt[i], cash[i]) for i in range(n)]  # 有息/现金（康美红线）
     quick     = [
         sdiv((cur_asset[i] - inventory[i]) if (cur_asset[i] is not None and inventory[i] is not None) else None,
              cur_liab[i])
@@ -712,10 +708,6 @@ def compute_risk(raw):
 
     SPECS = [
         # A · 资产端
-        {"group": "资产端", "name": "商誉占比", "vals": gw_ratio,
-         "status_series": _ss(gw_ratio, 0.30, 0.50, False),
-         "fmt": "pct", "unit": "商誉 / 净资产",
-         "signal": "<30% 健康 ｜ 30–50% 关注 ｜ >50% 警示"},
         {"group": "资产端", "name": "收入质量", "vals": rev_gap,
          "status_series": [(_traffic(v, 0.0, 0.10, False) if v is not None else "grey") for v in rev_gap],
          "fmt": "pp", "unit": "应收增速 − 营收增速",
@@ -737,10 +729,6 @@ def compute_risk(raw):
          "status_series": _ss(dr, 0.50, 0.70, False),
          "fmt": "pct", "unit": "负债合计 / 总资产",
          "signal": "<50% 健康 ｜ 50–70% 关注 ｜ >70% 警示（行业差异大）"},
-        {"group": "偿债与杠杆", "name": "有息负债/货币资金", "vals": idc,
-         "status_series": _ss(idc, 1.0, 2.0, False),
-         "fmt": "x", "unit": "有息负债 / 货币资金",
-         "signal": "<1.0 健康 ｜ 1.0–2.0 关注 ｜ >2.0 警示（康美/康得新造假信号）"},
         {"group": "偿债与杠杆", "name": "速动比率", "vals": quick,
          "status_series": _ss(quick, 1.0, 0.5, True),
          "fmt": "x", "unit": "(流动资产−存货) / 流动负债",
