@@ -487,20 +487,21 @@ def _get_pe_history(code):
         return None
 
     try:
-        # 财务指标（含 EPS 和 BVPS）
-        ind_df = ak.stock_financial_analysis_indicator(symbol=code, start_year="2019")
+        # 财务指标（含 EPS 和 BVPS）—— 用同花顺接口，境外服务器可访问
+        ind_df = ak.stock_financial_abstract_ths(symbol=code, indicator="按年度")
         if ind_df is None or ind_df.empty:
             return None
-        ind_df["_d"] = ind_df["日期"].astype(str).str.replace("-", "", regex=False).str[:8]
-        # 只取年报（1231）
-        ann = ind_df[ind_df["_d"].str.endswith("1231")].copy()
-        eps_col  = "摊薄每股收益(元)"
-        bvps_col = "每股净资产_调整前(元)"
-        if eps_col not in ann.columns:
+        # 报告期列为年份字符串如 "2023"，转成 YYYYMMDD 格式
+        ind_df["_d"] = ind_df["报告期"].astype(str).str.strip() + "1231"
+        eps_col  = "基本每股收益"
+        bvps_col = "每股净资产"
+        if eps_col not in ind_df.columns:
             return None
-        ann = ann[["_d", eps_col, bvps_col]].copy()
-        ann[eps_col]  = pd.to_numeric(ann[eps_col],  errors="coerce")
-        ann[bvps_col] = pd.to_numeric(ann[bvps_col], errors="coerce")
+        ann = ind_df[["_d", eps_col, bvps_col]].copy()
+        # 数值列可能带单位（如 "1.23亿"），先去掉非数字字符
+        for c in [eps_col, bvps_col]:
+            ann[c] = ann[c].astype(str).str.replace(r"[^\d.\-]", "", regex=True)
+            ann[c] = pd.to_numeric(ann[c], errors="coerce")
         ann = ann.sort_values("_d")
     except Exception as e:
         print(f"[ERR] 财务指标: {e}")
