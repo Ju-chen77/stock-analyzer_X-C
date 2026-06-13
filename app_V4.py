@@ -765,6 +765,47 @@ def api_analyze():
     })
 
 
+@app.route("/api/health")
+def api_health():
+    """
+    诊断接口：逐个测试每个数据源在当前服务器上的可达性。
+    用于排查境外服务器（Render）哪些中国数据源被拦截。
+    返回每个源的 ok/fail + 行数或错误信息。
+    """
+    import requests as _req
+    code = "600519"
+    sina = to_sina_code(code)
+    checks = {}
+
+    def _try(name, fn):
+        try:
+            r = fn()
+            checks[name] = {"ok": True, "detail": r}
+        except Exception as e:
+            checks[name] = {"ok": False, "detail": f"{type(e).__name__}: {e}"}
+
+    _try("code_name_list", lambda: f"{len(ak.stock_info_a_code_name())} 行")
+    _try("spot_em", lambda: f"{len(ak.stock_zh_a_spot_em())} 行")
+    _try("report_sina_income",
+         lambda: f"{len(ak.stock_financial_report_sina(stock=sina, symbol='利润表'))} 行")
+    _try("hist_monthly",
+         lambda: f"{len(ak.stock_zh_a_hist(symbol=code, period='monthly', start_date='20230101', adjust=''))} 行")
+    _try("abstract_ths",
+         lambda: f"{len(ak.stock_financial_abstract_ths(symbol=code, indicator='按年度'))} 行")
+    _try("daily_sina",
+         lambda: f"{len(ak.stock_zh_a_daily(symbol=sina, adjust=''))} 行")
+    _try("individual_info_em",
+         lambda: f"{len(ak.stock_individual_info_em(symbol=code))} 行")
+
+    def _push2():
+        r = _req.get(f"https://push2.eastmoney.com/api/qt/stock/get?secid=1.{code}&fields=f57,f58,f127", timeout=10)
+        d = r.json().get("data", {})
+        return f"name={d.get('f58')}, industry={d.get('f127')}"
+    _try("push2_eastmoney", _push2)
+
+    return jsonify({"code_name_loaded": int(len(_CODE_NAME)), "checks": checks})
+
+
 @app.route("/")
 def index():
     html = PAGE.replace("__PROJECT_NAME__", PROJECT_NAME).replace("__PROJECT_DESC__", PROJECT_DESC)
