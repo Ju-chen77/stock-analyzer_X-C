@@ -233,10 +233,37 @@ def _fetch_segment_revenue(code):
 # ═══════════════════════════════════════════════════════════════
 # 第一段：业绩检验
 # ═══════════════════════════════════════════════════════════════
-def compute_performance(raw):
+def _fetch_deduct_indicator(code):
     """
-    Part A：常规盈利指标（5 年时间序列）
-    Part B：利润表 vs 现金流量表 三组对照
+    额外抓取扣非净利润（新浪财务指标接口），三大报表不含此项。
+    Returns: dict {期间(yyyymmdd): 扣非净利润(元)}；失败返回 {}（容错，不阻塞主流程）
+    会计假设：扣除非经常性损益后归母净利润，CAS 口径
+    """
+    try:
+        df = ak.stock_financial_analysis_indicator(symbol=code, start_year="2018")
+        if df is None or df.empty:
+            return {}
+        dcol = next((c for c in df.columns if "日期" in str(c)), None)
+        vcol = next((c for c in df.columns if "扣除非经常性损益后的净利润" in str(c)), None)
+        if not dcol or not vcol:
+            return {}
+        out = {}
+        for _, row in df.iterrows():
+            d = str(row[dcol]).replace("-", "").strip()
+            if d.endswith("1231"):
+                out[d] = sf(row[vcol])
+        return out
+    except Exception as e:
+        print(f"[ERR] deduct indicator: {e}")
+        return {}
+
+
+def compute_performance(raw, code=None):
+    """
+    业绩检验三层结构：
+    A · 盈利能力（增长性 + 盈利率 + 回报率 ROE/ROA/ROIC + 扣非）
+    B · 业绩自洽性（营收 vs 合同负债；营收 vs 应收/存货见验证排雷）
+    C · 现金流验证（三组含金量 + FCF + 三类现金流组合判读）
     Returns: dict
     """
     income   = raw.get("income")
@@ -275,6 +302,64 @@ def compute_performance(raw):
                 roe.append(sdiv(p, e))
     else:
         roe = [None] * len(periods)
+
+    # ── A 层补充：营业利润率 / ROA / ROIC / 扣非 ──────────
+    op_profit = col_vals(income, fcol(income, "营业利润"), periods)
+    op_margin = [sdiv(o, r) for o, r in zip(op_profit, revenue)]
+
+    assets = (col_vals(balance, fcol(balance, "资产总计"), periods)
+              if balance is not None else [None] * len(periods))
+    roa = []
+    for i, (p, a) in enumerate(zip(net_profit, assets)):
+        if i + 1 < len(assets) and assets[i + 1] is not None and a is not None:
+            roa.append(sdiv(p, (a + assets[i + 1]) / 2))   # 平均总资产
+        else:
+            roa.append(sdiv(p, a))
+
+    # ROIC = EBIT×(1−税率) /（净资产 + 有息负债）排除杠杆看真实回报
+    roic = [None] * len(periods)
+    if balance is not None:
+        pretax  = col_vals(income, fcol(income, "利润总额"),    periods)
+        taxexp  = col_vals(income, fcol(income, "所得税费用"),  periods)
+        int_exp = col_vals(income, fcol(income, "利息费用"),    periods)
+        fin_exp = col_vals(income, fcol(income, "财务费用"),    periods)
+        eq      = _get_equity(balance, periods)
+        stl = col_vals(balance, fcol(balance, "短期借款"), periods)
+        cdu = col_vals(balance, fcol(balance, "一年内到期的非流动负债"), periods)
+        ltl = col_vals(balance, fcol(balance, "长期借款"), periods)
+        bnd = col_vals(balance, fcol(balance, "应付债券"), periods)
+        for i in range(len(periods)):
+            if pretax[i] is None:
+                continue
+            ie   = int_exp[i] if int_exp[i] not in (None, 0) else (fin_exp[i] or 0)
+            ebit = pretax[i] + ie
+            tax  = sdiv(taxexp[i], pretax[i])
+            tax  = min(max(tax, 0.0), 0.4) if tax is not None else 0.25
+            debt = sum(v for v in [stl[i], cdu[i], ltl[i], bnd[i]] if v is not None)
+            invcap = (eq[i] or 0) + debt
+            if invcap:
+                roic[i] = ebit * (1 - tax) / invcap
+
+    # 扣非净利润（额外数据源，容错；失败则全 None）
+    deduct_map    = _fetch_deduct_indicator(code) if code else {}
+    deduct        = [deduct_map.get(p) for p in periods]
+    deduct_margin = [sdiv(d, r) for d, r in zip(deduct, revenue)]
+    deduct_yoy    = yoy_list(deduct)
+
+    # ── B 层：营收 vs 合同负债（未来订单领先指标）──────────
+    contract = {}
+    if balance is not None:
+        cl  = col_vals(balance, fcol(balance, "合同负债"),   periods)
+        pre = col_vals(balance, fcol(balance, "预收款项"),   periods)
+        contract_liab = [(cl[i] if cl[i] not in (None, 0) else pre[i])
+                         for i in range(len(periods))]
+        contract = {
+            "periods":       periods,
+            "revenue":       revenue,
+            "contract_liab": contract_liab,
+            "contract_yoy":  yoy_list(contract_liab),
+            "rev_yoy":       revenue_yoy,
+        }
 
     # ── Part B：三组现金流对照 ──────────────────────────
     cash_match = {}
@@ -315,6 +400,42 @@ def compute_performance(raw):
             "cum_profit":    list(reversed(cum_profit)),
             "cum_ocf":       list(reversed(cum_ocf)),
         }
+
+    # ── C 层补充：自由现金流 FCF + 三类现金流组合判读 ──────
+    fcf_data = {}
+    cf_pattern = {}
+    if cashflow is not None:
+        cfp     = annual_periods(cashflow, 6)
+        ocf_c   = col_vals(cashflow, fcol(cashflow, "经营活动产生的现金流量净额", "经营活动产生"), cfp)
+        inv_c   = col_vals(cashflow, fcol(cashflow, "投资活动产生的现金流量净额", "投资活动产生"), cfp)
+        fin_c   = col_vals(cashflow, fcol(cashflow, "筹资活动产生的现金流量净额", "筹资活动产生"), cfp)
+        capex_c = col_vals(cashflow, fcol(cashflow, "购建固定资产、无形资产和其他长期资产支付的现金", "购建固定资产"), cfp)
+        fcf = [(ocf_c[i] - abs(capex_c[i]))
+               if (ocf_c[i] is not None and capex_c[i] is not None) else None
+               for i in range(len(cfp))]
+        fcf_data = {"periods": cfp, "ocf": ocf_c, "capex": capex_c, "fcf": fcf}
+
+        # 经营/投资/筹资 正负组合 → 8 种公司阶段
+        PATTERN = {
+            (1, -1, -1): ("健康成熟期", "low"),
+            (1, -1,  1): ("成长扩张期", "mid"),
+            (1,  1, -1): ("收缩调整期", "mid"),
+            (1,  1,  1): ("现金积累期", "low"),
+            (-1, -1, 1): ("靠融资生存", "high"),
+            (-1,  1, 1): ("变卖资产+借钱", "extreme"),
+            (-1,  1, -1): ("收缩自救期", "high"),
+            (-1, -1, -1): ("三流皆出", "extreme"),
+        }
+        labels = []
+        for i in range(len(cfp)):
+            o, v, f = ocf_c[i], inv_c[i], fin_c[i]
+            if None in (o, v, f):
+                labels.append({"period": cfp[i], "label": "数据缺失", "risk": "grey", "signs": [None, None, None]})
+                continue
+            sg = (1 if o >= 0 else -1, 1 if v >= 0 else -1, 1 if f >= 0 else -1)
+            lab, risk = PATTERN.get(sg, ("—", "grey"))
+            labels.append({"period": cfp[i], "label": lab, "risk": risk, "signs": list(sg)})
+        cf_pattern = {"periods": cfp, "op_cf": ocf_c, "inv_cf": inv_c, "fin_cf": fin_c, "labels": labels}
 
     # ── Part D / E：资产 & 负债堆积图 ──────────────────────
     asset_stack = {}
@@ -372,10 +493,18 @@ def compute_performance(raw):
         "net_profit":       net_profit,
         "gross_margin":     gross_margin,
         "net_margin":       net_margin,
+        "op_margin":        op_margin,
+        "deduct_margin":    deduct_margin,
+        "deduct_yoy":       deduct_yoy,
         "roe":              roe,
+        "roa":              roa,
+        "roic":             roic,
         "revenue_yoy":      revenue_yoy,
         "profit_yoy":       profit_yoy,
+        "contract":         contract,
         "cash_match":       cash_match,
+        "fcf":              fcf_data,
+        "cf_pattern":       cf_pattern,
         "asset_stack":      asset_stack,
         "liability_stack":  liability_stack,
     }
@@ -1169,7 +1298,7 @@ def api_analyze():
     price = fetch_price(code)
     raw   = fetch_raw(code)
 
-    perf  = compute_performance(raw)
+    perf  = compute_performance(raw, code)
     attr  = compute_attribution(raw)
     risk  = compute_risk(raw)
     val   = compute_valuation(code, raw, price)

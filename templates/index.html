@@ -145,6 +145,14 @@ h1{font-family:var(--display);font-weight:700;font-size:clamp(36px,7vw,56px);
 .contrib-label{font-size:12px;color:var(--muted);margin-bottom:2px}
 .contrib-val{font-family:var(--mono);font-size:18px;font-weight:600}
 
+/* ── 三类现金流组合标签条 ── */
+.cfpattern-strip{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:6px;
+  margin-top:10px;padding-top:10px;border-top:1px dashed var(--line)}
+.cfp-cell{text-align:center}
+.cfp-year{font-family:var(--mono);font-size:11px;color:var(--muted)}
+.cfp-signs{font-family:var(--mono);font-size:18px;font-weight:700;letter-spacing:2px;color:var(--ink)}
+.cfp-label{font-size:11.5px;font-weight:600;line-height:1.3}
+
 /* ── 排雷总判定卡片 ── */
 .risk-verdict-card{border-radius:6px;padding:18px 22px;margin-bottom:8px}
 .risk-tally{font-family:var(--mono);font-size:14px;color:var(--ink);margin-left:auto}
@@ -204,7 +212,7 @@ footer{width:100%;max-width:980px;margin:0 auto;font-family:var(--mono);font-siz
 
     <!-- ── Tab 1：业绩检验 ── -->
     <div class="tab-panel active" id="t1">
-      <p class="sec-label">Part A · 常规盈利指标</p>
+      <p class="sec-label">Part A · 盈利能力</p>
       <div class="kpi-row" id="kpi-row"></div>
 
       <div class="chart-wrap">
@@ -212,13 +220,27 @@ footer{width:100%;max-width:980px;margin:0 auto;font-family:var(--mono);font-siz
         <div id="ch-rev-profit" style="height:280px"></div>
         <div class="chart-note">柱：金额（左轴 亿元） ｜ 线：同比增速（右轴 %）</div>
       </div>
+      <div id="growth-quality" class="chart-note" style="margin:-4px 2px 16px;line-height:1.7"></div>
 
       <div class="chart-wrap">
-        <div class="chart-title">盈利能力趋势：毛利率 / 净利率 / ROE</div>
-        <div id="ch-margins" style="height:240px"></div>
+        <div class="chart-title">利润率趋势：毛利率 / 营业利润率 / 净利率 / 扣非净利率</div>
+        <div id="ch-margins" style="height:260px"></div>
+        <div class="chart-note">扣非净利率 = 剔除一次性损益的真实盈利能力；净利率 − 扣非净利率 &gt;2pct 需关注非经常损益</div>
+      </div>
+      <div class="chart-wrap">
+        <div class="chart-title">回报率趋势：ROE / ROA / ROIC</div>
+        <div id="ch-returns" style="height:240px"></div>
+        <div class="chart-note">ROE 高而 ROIC 一般 → 回报主要靠加杠杆（详见②业绩归因杜邦分解）</div>
       </div>
 
-      <p class="sec-label" style="margin-top:24px">Part B · 利润表 vs 现金流量表 三组对照</p>
+      <p class="sec-label" style="margin-top:28px">Part B · 业绩自洽性</p>
+      <div class="chart-wrap">
+        <div class="chart-title">营业收入 vs 合同负债（未来订单领先指标）</div>
+        <div id="ch-contract" style="height:260px"></div>
+        <div class="chart-note">合同负债领先营收 → 订单充裕；大幅下滑 → 未来营收承压。应收/存货自洽性见「③ 验证排雷」</div>
+      </div>
+
+      <p class="sec-label" style="margin-top:24px">Part C · 现金流验证：利润表 vs 现金流量表</p>
       <div class="chart-wrap">
         <div class="chart-title">① 收入含金量</div>
         <div id="ch-cm1" style="height:240px"></div>
@@ -239,8 +261,19 @@ footer{width:100%;max-width:980px;margin:0 auto;font-family:var(--mono);font-siz
         <div id="ch-cum-nio" style="height:260px"></div>
         <div class="chart-note">累计 CFO 长期低于累计净利润 → 利润"赚到纸上"，可能存在财务造假风险</div>
       </div>
+      <div class="chart-wrap">
+        <div class="chart-title">⑤ 自由现金流 FCF（经营现金流 − 资本开支）</div>
+        <div id="ch-fcf" style="height:240px"></div>
+        <div class="chart-note">FCF 持续为正才是真盈利；连续为负 = 增长靠烧钱（重资产扩张期为负需结合 ROIC 判断）</div>
+      </div>
+      <div class="chart-wrap">
+        <div class="chart-title">⑥ 三类现金流组合（经营 / 投资 / 筹资）</div>
+        <div id="ch-cfpattern" style="height:240px"></div>
+        <div id="cfpattern-labels" class="cfpattern-strip"></div>
+        <div class="chart-note">+−− 健康成熟 ｜ +−+ 成长扩张 ｜ −−+ 靠融资生存 ⚠️ ｜ −++ 变卖资产+借钱 ⚠️⚠️</div>
+      </div>
 
-      <p class="sec-label" style="margin-top:24px">Part C · 主营业务构成（按产品）</p>
+      <p class="sec-label" style="margin-top:24px">Part D · 主营业务构成（按产品）</p>
       <div class="chart-wrap">
         <div class="chart-title">各业务线营业收入（亿元）</div>
         <div id="ch-seg-rev" style="height:280px"></div>
@@ -254,14 +287,14 @@ footer{width:100%;max-width:980px;margin:0 auto;font-family:var(--mono);font-siz
         <div id="ch-seg-cost" style="height:240px"></div>
       </div>
 
-      <p class="sec-label" style="margin-top:24px">Part D · 历年资产结构堆积图</p>
+      <p class="sec-label" style="margin-top:24px">Part E · 历年资产结构堆积图</p>
       <div class="chart-wrap">
         <div class="chart-title">主要资产项目构成（亿元）</div>
         <div id="ch-asset-stack" style="height:300px"></div>
         <div class="chart-note">固定资产+在建工程、长期股权投资、应收类资产、商誉+无形资产、现金类资产、存货、预付类资产</div>
       </div>
 
-      <p class="sec-label" style="margin-top:24px">Part E · 历年负债结构堆积图</p>
+      <p class="sec-label" style="margin-top:24px">Part F · 历年负债结构堆积图</p>
       <div class="chart-wrap">
         <div class="chart-title">主要负债项目构成（亿元）</div>
         <div id="ch-liab-stack" style="height:300px"></div>
@@ -522,17 +555,24 @@ function renderPerformance(perf) {
   const prof    = perf.net_profit.map(yi);
   const gm      = perf.gross_margin.map(pct);
   const nm      = perf.net_margin.map(pct);
+  const opm     = (perf.op_margin     || []).map(pct);
+  const dm      = (perf.deduct_margin || []).map(pct);
   const roe     = perf.roe.map(pct);
+  const roa     = (perf.roa  || []).map(pct);
+  const roic    = (perf.roic || []).map(pct);
   const ryoy    = perf.revenue_yoy.map(pct);
   const pyoy    = perf.profit_yoy.map(pct);
+  const dyoy    = (perf.deduct_yoy || []).map(pct);
+  const hasDeduct = dm.some(v => v !== null);
 
-  const latest = xLabels[0];
   const kpis = [
     {tag:'营业收入', val: rev[0]   == null ? '—' : rev[0].toFixed(1),   unit:'亿元'},
     {tag:'归母净利润', val: prof[0] == null ? '—' : prof[0].toFixed(1), unit:'亿元'},
     {tag:'毛利率',  val: gm[0]     == null ? '—' : gm[0].toFixed(1),   unit:'%'},
     {tag:'净利率',  val: nm[0]     == null ? '—' : nm[0].toFixed(1),   unit:'%'},
+    {tag:'扣非净利率', val: dm[0]  == null ? '—' : dm[0].toFixed(1),   unit:'%'},
     {tag:'ROE',     val: roe[0]    == null ? '—' : roe[0].toFixed(1),  unit:'%'},
+    {tag:'ROIC',    val: roic[0]   == null ? '—' : roic[0].toFixed(1), unit:'%'},
   ];
   $('#kpi-row').innerHTML = kpis.map(k =>
     `<div class="kpi-card">
@@ -555,17 +595,73 @@ function renderPerformance(perf) {
     margin:{t:10, r:50, b:36, l:52},
   }, PLOTLY_CFG);
 
-  Plotly.newPlot('ch-margins', [
-    {name:'毛利率', type:'scatter', mode:'lines+markers', x:xLabels, y:gm,
+  // 增长质量判读：营收增速 vs 扣非净利润增速
+  (function(){
+    const r = ryoy[0], d = hasDeduct ? dyoy[0] : null, p = pyoy[0];
+    if (r == null) { $('#growth-quality').textContent = ''; return; }
+    let msg = `最新一期营收 YoY <b>${r.toFixed(1)}%</b>`;
+    if (p != null) msg += ` ｜ 归母净利润 YoY <b>${p.toFixed(1)}%</b>`;
+    if (d != null) {
+      msg += ` ｜ 扣非净利润 YoY <b>${d.toFixed(1)}%</b>`;
+      if (p != null && p - d > 30) msg += '　⚠️ 归母增速远高于扣非 → 业绩或靠非经常性损益拉动';
+      else if (Math.abs(d) > 100 || Math.abs(r) > 100) msg += '　· 增速畸高，多为低基数效应，建议看绝对额与利润率趋势';
+      else if (d < r - 10) msg += '　⚠️ 扣非增速明显落后营收 → 主业盈利质量待观察';
+      else msg += '　✅ 扣非与营收增速基本匹配，增长质量健康';
+    }
+    $('#growth-quality').innerHTML = msg;
+  })();
+
+  // 利润率趋势：毛利率 / 营业利润率 / 净利率 / 扣非净利率
+  const mTraces = [
+    {name:'毛利率',     type:'scatter', mode:'lines+markers', x:xLabels, y:gm,
       line:{color:C.teal,  width:2.5}, marker:{size:6}},
-    {name:'净利率', type:'scatter', mode:'lines+markers', x:xLabels, y:nm,
+    {name:'营业利润率', type:'scatter', mode:'lines+markers', x:xLabels, y:opm,
+      line:{color:C.blue,  width:2}, marker:{size:5}},
+    {name:'净利率',     type:'scatter', mode:'lines+markers', x:xLabels, y:nm,
       line:{color:C.amber, width:2.5}, marker:{size:6}},
-    {name:'ROE',    type:'scatter', mode:'lines+markers', x:xLabels, y:roe,
-      line:{color:C.blue,  width:2.5}, marker:{size:6}},
+  ];
+  if (hasDeduct) mTraces.push(
+    {name:'扣非净利率', type:'scatter', mode:'lines+markers', x:xLabels, y:dm,
+      line:{color:C.red, width:2, dash:'dot'}, marker:{size:5}});
+  Plotly.newPlot('ch-margins', mTraces, {
+    ...LAYOUT_BASE,
+    yaxis:{title:'%', gridcolor:'#F0F2F4', ticksuffix:'%'},
+  }, PLOTLY_CFG);
+
+  // 回报率趋势：ROE / ROA / ROIC
+  Plotly.newPlot('ch-returns', [
+    {name:'ROE',  type:'scatter', mode:'lines+markers', x:xLabels, y:roe,
+      line:{color:C.teal,  width:2.5}, marker:{size:6}},
+    {name:'ROA',  type:'scatter', mode:'lines+markers', x:xLabels, y:roa,
+      line:{color:C.amber, width:2}, marker:{size:5}},
+    {name:'ROIC', type:'scatter', mode:'lines+markers', x:xLabels, y:roic,
+      line:{color:C.purple,width:2.5, dash:'dot'}, marker:{size:6}},
   ], {
     ...LAYOUT_BASE,
     yaxis:{title:'%', gridcolor:'#F0F2F4', ticksuffix:'%'},
   }, PLOTLY_CFG);
+
+  // Part B · 营收 vs 合同负债
+  const ct = perf.contract;
+  if (ct && ct.periods && ct.periods.length && ct.contract_liab.some(v => v !== null)) {
+    const cxl = ct.periods.map(fmtPeriod);
+    Plotly.newPlot('ch-contract', [
+      {name:'营业收入', type:'bar', x:cxl, y:ct.revenue.map(yi),
+        marker:{color:C.teal_a, line:{color:C.teal,width:1.5}}, yaxis:'y'},
+      {name:'合同负债', type:'bar', x:cxl, y:ct.contract_liab.map(yi),
+        marker:{color:C.amber_a, line:{color:C.amber,width:1.5}}, yaxis:'y'},
+      {name:'合同负债 YoY', type:'scatter', mode:'lines+markers', x:cxl, y:ct.contract_yoy.map(pct),
+        line:{color:C.amber,width:2,dash:'dot'}, marker:{size:5}, yaxis:'y2'},
+    ], {
+      ...LAYOUT_BASE,
+      barmode:'group',
+      yaxis:{title:'亿元', gridcolor:'#F0F2F4'},
+      yaxis2:{overlaying:'y', side:'right', showgrid:false, ticksuffix:'%'},
+      margin:{t:10, r:50, b:36, l:52},
+    }, PLOTLY_CFG);
+  } else if (ct && ct.periods) {
+    $('#ch-contract').innerHTML = '<div style="padding:40px 0;text-align:center;color:#A0AAB4;font-size:13px">该公司无合同负债/预收款项（多为即时交易模式，此项不适用）</div>';
+  }
 
   const cm = perf.cash_match;
   if (cm && cm.periods && cm.periods.length) {
@@ -598,6 +694,49 @@ function renderPerformance(perf) {
         legend:{orientation:'h', y:-0.2, font:{size:11}},
       }, PLOTLY_CFG);
     }
+  }
+
+  // ⑤ 自由现金流 FCF
+  const fc = perf.fcf;
+  if (fc && fc.periods && fc.periods.length) {
+    const fxl = fc.periods.map(fmtPeriod);
+    const fv  = fc.fcf.map(yi);
+    Plotly.newPlot('ch-fcf', [
+      {name:'自由现金流', type:'bar', x:fxl, y:fv,
+        marker:{color: fv.map(v => v != null && v < 0 ? C.red : C.teal)}},
+    ], {
+      ...LAYOUT_BASE,
+      margin:{t:10,r:20,b:36,l:52},
+      yaxis:{title:'亿元', gridcolor:'#F0F2F4', zeroline:true, zerolinecolor:'#C8CED6'},
+    }, PLOTLY_CFG);
+  }
+
+  // ⑥ 三类现金流组合
+  const cfp = perf.cf_pattern;
+  if (cfp && cfp.periods && cfp.periods.length) {
+    const pxl = cfp.periods.map(fmtPeriod);
+    Plotly.newPlot('ch-cfpattern', [
+      {name:'经营', type:'bar', x:pxl, y:cfp.op_cf.map(yi),  marker:{color:C.teal}},
+      {name:'投资', type:'bar', x:pxl, y:cfp.inv_cf.map(yi), marker:{color:C.blue}},
+      {name:'筹资', type:'bar', x:pxl, y:cfp.fin_cf.map(yi), marker:{color:C.amber}},
+    ], {
+      ...LAYOUT_BASE,
+      barmode:'group',
+      yaxis:{title:'亿元', gridcolor:'#F0F2F4', zeroline:true, zerolinecolor:'#C8CED6'},
+      legend:{orientation:'h', y:-0.2, font:{size:11}},
+    }, PLOTLY_CFG);
+
+    const RISKC = {low:'#0B6E5D', mid:'#C07B12', high:'#B23A2E', extreme:'#B23A2E', grey:'#A0AAB4'};
+    const sgn = s => s == null ? '·' : s > 0 ? '+' : '−';
+    $('#cfpattern-labels').innerHTML = (cfp.labels || []).slice().reverse().map(l => {
+      const c = RISKC[l.risk] || '#A0AAB4';
+      const warn = l.risk === 'extreme' ? ' ⚠️⚠️' : l.risk === 'high' ? ' ⚠️' : '';
+      return `<div class="cfp-cell">
+        <div class="cfp-year">${fmtPeriod(l.period)}</div>
+        <div class="cfp-signs">${sgn(l.signs[0])}${sgn(l.signs[1])}${sgn(l.signs[2])}</div>
+        <div class="cfp-label" style="color:${c}">${l.label}${warn}</div>
+      </div>`;
+    }).join('');
   }
 }
 
