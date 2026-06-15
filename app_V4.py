@@ -1174,18 +1174,37 @@ def compute_valuation(code, raw, price):
 # ═══════════════════════════════════════════════════════════════
 def _get_em_info(code):
     """
-    东方财富 push2 行情接口获取「行业 / 名称」。
-    替代有 pandas bug（Length mismatch）的 ak.stock_individual_info_em。
+    东财 F10 接口（emweb，与主营构成同源，代理环境可达）获取「行业 / 名称」。
+    替代有 pandas bug（Length mismatch）的 ak.stock_individual_info_em，
+    以及被代理阻断的 push2.eastmoney.com 行情接口。
     Returns: dict {name, industry}；失败返回 {}
     """
     try:
-        secid = ("1." if code.startswith(("6", "9")) else "0.") + code
-        r = _req.get("https://push2.eastmoney.com/api/qt/stock/get",
-                     params={"secid": secid, "fields": "f57,f58,f127"},
-                     headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
-        d = (r.json() or {}).get("data") or {}
-        return {"name":     str(d.get("f58", "")).strip(),
-                "industry": str(d.get("f127", "")).strip()}
+        prefix = "SH" if code.startswith(("6", "9")) else "SZ"
+        url = (f"https://emweb.securities.eastmoney.com/PC_HSF10/CompanySurvey/PageAjax"
+               f"?code={prefix}{code}")
+        r = _req.get(url, timeout=12,
+                     headers={"User-Agent": "Mozilla/5.0",
+                              "Referer": "https://emweb.securities.eastmoney.com"})
+        jbzl = (r.json() or {}).get("jbzl") or []
+        row = (jbzl[0] if isinstance(jbzl, list) and jbzl
+               else (jbzl if isinstance(jbzl, dict) else {}))
+
+        # 行业：优先东财 EM2016 三级分类（去重连级），退 CSRC 大类
+        industry = ""
+        em = str(row.get("EM2016", "") or "").strip()
+        if em:
+            dedup = []
+            for p in em.split("-"):
+                p = p.strip()
+                if p and p not in dedup:
+                    dedup.append(p)
+            industry = "-".join(dedup)
+        if not industry:
+            industry = str(row.get("INDUSTRYCSRC1", "") or "").strip()
+
+        return {"name":     str(row.get("SECURITY_NAME_ABBR", "") or "").strip(),
+                "industry": industry}
     except Exception as e:
         print(f"[ERR] em info: {e}")
         return {}

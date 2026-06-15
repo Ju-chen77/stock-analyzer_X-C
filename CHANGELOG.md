@@ -4,6 +4,14 @@
 
 ---
 
+## [app_V4.9] — 2026-06-14
+
+### 修复
+
+- **行业名称仍不显示（V4.8 修复未生效）**：上一版改用的 `push2.eastmoney.com` 行情接口在本地代理环境被阻断（ProxyError，与早前 `push2his` 同因），导致行业仍为空。改用 `emweb.securities.eastmoney.com` F10 接口（与「主营构成」同源、代理可达）的 `CompanySurvey` 取行业：优先东财 EM2016 三级分类（去重连级，如「电子设备-电子元件」「食品饮料-饮料-白酒」），退 CSRC 大类；名称取 `SECURITY_NAME_ABBR`
+
+---
+
 ## [docs] — 2026-06-14
 
 ### 新增
