@@ -16,7 +16,7 @@ import requests as _req
 import pandas as pd
 from flask import Flask, request, jsonify, render_template
 
-PROJECT_NAME = "三段式财报透视"
+PROJECT_NAME = "财报透析"
 PROJECT_DESC = "业绩检验 · 业绩归因 · 验证排雷"
 
 app = Flask(__name__)
@@ -1172,6 +1172,25 @@ def compute_valuation(code, raw, price):
 
 # 价格与行业信息（复用 V1 逻辑）
 # ═══════════════════════════════════════════════════════════════
+def _get_em_info(code):
+    """
+    东方财富 push2 行情接口获取「行业 / 名称」。
+    替代有 pandas bug（Length mismatch）的 ak.stock_individual_info_em。
+    Returns: dict {name, industry}；失败返回 {}
+    """
+    try:
+        secid = ("1." if code.startswith(("6", "9")) else "0.") + code
+        r = _req.get("https://push2.eastmoney.com/api/qt/stock/get",
+                     params={"secid": secid, "fields": "f57,f58,f127"},
+                     headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+        d = (r.json() or {}).get("data") or {}
+        return {"name":     str(d.get("f58", "")).strip(),
+                "industry": str(d.get("f127", "")).strip()}
+    except Exception as e:
+        print(f"[ERR] em info: {e}")
+        return {}
+
+
 def fetch_price(code):
     """获取最新股价（akshare）"""
     try:
@@ -1286,14 +1305,12 @@ def api_analyze():
     if name == code:
         name = _sina_name(code) or code
 
-    try:
-        info_df = ak.stock_individual_info_em(symbol=code)
-        info_d  = dict(zip(info_df["item"].astype(str), info_df["value"]))
-        industry = str(info_d.get("行业", ""))
-        if name == code and info_d.get("股票简称"):
-            name = str(info_d["股票简称"])
-    except Exception:
-        pass
+    # 行业 & 名称兜底：东财 push2 行情接口（替代有 pandas bug 的 stock_individual_info_em）
+    em = _get_em_info(code)
+    if em.get("industry"):
+        industry = em["industry"]
+    if name == code and em.get("name"):
+        name = em["name"]
 
     price = fetch_price(code)
     raw   = fetch_raw(code)
