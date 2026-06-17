@@ -207,6 +207,7 @@ footer{width:100%;max-width:980px;margin:0 auto;font-family:var(--mono);font-siz
       <button class="tab-btn"        data-tab="t2">② 业绩归因</button>
       <button class="tab-btn"        data-tab="t3">③ 验证排雷</button>
       <button class="tab-btn"        data-tab="t4">④ 估值区间</button>
+      <button class="tab-btn"        data-tab="t5">⑤ 量价印证</button>
     </nav>
 
     <!-- ── Tab 1：业绩检验 ── -->
@@ -413,6 +414,41 @@ footer{width:100%;max-width:980px;margin:0 auto;font-family:var(--mono);font-siz
       </p>
     </div>
 
+    <!-- ── Tab 5：量价印证 ── -->
+    <div class="tab-panel" id="t5">
+      <p class="chart-note" style="margin:0 2px 16px;line-height:1.7">
+        量价只<b>印证</b>不<b>预测</b>：基本面告诉你"该不该买"，量价告诉你"市场是否同意、资金是否已在动"。
+        基本面 + 量价<b>共振</b>才是强信号，<b>背离</b>则值得深挖。
+      </p>
+
+      <!-- 基本面 × 量价 四象限定位 -->
+      <p class="sec-label">基本面 × 量价 · 四象限定位</p>
+      <div id="mkt-quadrant" style="display:none"></div>
+
+      <!-- 基础行情：K线 + 量 + 均线 -->
+      <p class="sec-label" style="margin-top:28px">基础行情 · 日 K（前复权）+ 成交量 + 均线</p>
+      <div class="chart-wrap">
+        <div class="chart-title">近 1 年 K 线 / MA5·20·60 / 成交量</div>
+        <div id="ch-kline" style="height:420px"></div>
+        <div id="mkt-turnover-note" class="chart-note">均线多头排列（MA5&gt;MA20&gt;MA60）+ 放量站上 60 日线 = 趋势走强</div>
+      </div>
+
+      <!-- 场景C：估值修复确认 -->
+      <p class="sec-label" style="margin-top:28px">估值修复确认 · 估值低位 × 量能 × 趋势 三重共振</p>
+      <div id="mkt-recovery" style="display:none"></div>
+
+      <!-- 场景D：相对强度 -->
+      <p class="sec-label" style="margin-top:28px">相对强度 · 个股 vs 大盘（上证综指，近 60 交易日）</p>
+      <div id="mkt-rs" style="display:none"></div>
+
+      <!-- 资金流向（暂不可用） -->
+      <div class="chart-note" style="margin:20px 2px 8px;line-height:1.7">
+        💡 <b>资金流向（北向持股 / 主力净流入 / 龙虎榜 / 融资融券 / 大宗交易）</b>暂未接入：
+        这些数据依赖东方财富 push2 接口，当前本地代理环境无法访问（与历史 PE 改用新浪源同因）。
+        如在可直连环境运行，可后续补充。
+      </div>
+    </div>
+
   </main>
 
   <footer id="footer" style="display:none">
@@ -523,6 +559,116 @@ function renderTab(tabId) {
   if (tabId === 't2') renderAttribution(_appData.attribution);
   if (tabId === 't3') renderRisk(_appData.risk);
   if (tabId === 't4') renderValuation(_appData.valuation);
+  if (tabId === 't5') loadMarket();
+}
+
+// ── 第五段：量价印证（懒加载）──────────────────────────────
+async function loadMarket() {
+  if (!_appData) return;
+  const code = _appData.info.code;
+  const v = _appData.valuation || {};
+  const lvl = (_appData.risk && _appData.risk.verdict && _appData.risk.verdict.level) || '';
+  const qs = new URLSearchParams({
+    code,
+    pe_pct: v.pe_percentile == null ? '' : v.pe_percentile,
+    pb_pct: v.pb_percentile == null ? '' : v.pb_percentile,
+    risk:   lvl,
+  });
+  $('#ch-kline').innerHTML =
+    '<div style="padding:70px 0;text-align:center;color:#A0AAB4;font-size:13px">正在加载量价数据…</div>';
+  try {
+    const d = await (await fetch('/api/market?' + qs)).json();
+    renderMarket(d.market);
+  } catch (e) {
+    $('#ch-kline').innerHTML =
+      '<div style="padding:70px 0;text-align:center;color:#B23A2E;font-size:13px">量价数据加载失败，请重试</div>';
+  }
+}
+
+function renderMarket(m) {
+  if (!m || !m.kline || !m.kline.dates || !m.kline.dates.length) {
+    $('#ch-kline').innerHTML =
+      '<div style="padding:70px 0;text-align:center;color:#A0AAB4;font-size:13px">该股暂无足够量价数据</div>';
+    return;
+  }
+  $('#ch-kline').innerHTML = '';   // 清除加载占位
+  const k = m.kline, UP = '#B23A2E', DOWN = '#0B6E5D';   // A股 红涨绿跌
+  const volColors = k.close.map((c, i) =>
+    (k.open[i] != null && c != null && c >= k.open[i]) ? 'rgba(178,58,46,.5)' : 'rgba(11,110,93,.5)');
+
+  Plotly.newPlot('ch-kline', [
+    {type:'candlestick', x:k.dates, open:k.open, high:k.high, low:k.low, close:k.close,
+      name:'K线', increasing:{line:{color:UP}}, decreasing:{line:{color:DOWN}}, yaxis:'y'},
+    {type:'scatter', mode:'lines', x:k.dates, y:k.ma5,  name:'MA5',  line:{color:'#C07B12',width:1}, yaxis:'y'},
+    {type:'scatter', mode:'lines', x:k.dates, y:k.ma20, name:'MA20', line:{color:'#1A5FAD',width:1}, yaxis:'y'},
+    {type:'scatter', mode:'lines', x:k.dates, y:k.ma60, name:'MA60', line:{color:'#6D3DB2',width:1.5}, yaxis:'y'},
+    {type:'bar', x:k.dates, y:k.volume, name:'成交量', marker:{color:volColors}, yaxis:'y2'},
+  ], {
+    ...LAYOUT_BASE,
+    xaxis:{type:'category', rangeslider:{visible:false}, tickfont:{size:10}, nticks:9},
+    yaxis:{domain:[0.27,1], gridcolor:'#F0F2F4', title:'价(元)'},
+    yaxis2:{domain:[0,0.2], gridcolor:'#F0F2F4'},
+    margin:{t:10, r:10, b:28, l:52},
+    legend:{orientation:'h', y:-0.06, font:{size:10}},
+    showlegend:true,
+  }, PLOTLY_CFG);
+
+  // 四象限定位
+  const q = m.quadrant;
+  if (q && q.code) {
+    const QC = {RESONANCE_BUY:'#0B6E5D', BUBBLE_WARN:'#C07B12', VALUE_TRAP:'#C07B12', AVOID:'#B23A2E'};
+    const c = QC[q.code] || '#A0AAB4';
+    const el = $('#mkt-quadrant'); el.style.display = 'block';
+    el.innerHTML = `
+      <div class="risk-verdict-card" style="border-left:5px solid ${c};background:#fff">
+        <div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap">
+          <span style="font-size:13px;color:#6A7480">四象限定位</span>
+          <span style="font-size:24px;font-weight:800;color:${c}">${q.label}</span>
+          <span class="risk-tally">基本面 ${q.fund_good ? '好 ✓' : '差 ✕'} ｜ 量价 ${q.market_positive ? '正向 ↑' : '负向 ↓'}</span>
+        </div>
+        <div style="margin-top:8px;color:#11151B;font-size:14px">${q.desc}</div>
+      </div>`;
+  }
+
+  // 估值修复确认（场景 C）
+  const rc = m.recovery;
+  if (rc) {
+    const RV = {RESONANCE_BUY:['#0B6E5D','估值修复启动（三重共振）'],
+                VALUE_TRAP:['#C07B12','价值陷阱（低估但市场暂不认可）'],
+                NEUTRAL:['#6A7480','信号不足，继续观察']};
+    const [rcc, rct] = RV[rc.verdict] || ['#6A7480','—'];
+    const chk = (ok, name, detail) =>
+      `<div class="cf-check-card"><div class="cf-check-ico">${ok ? '✅' : '⬜'}</div>
+        <div class="cf-check-name">${name}</div><div class="cf-check-desc">${detail}</div></div>`;
+    const el = $('#mkt-recovery'); el.style.display = 'block';
+    el.innerHTML = `
+      <div class="risk-verdict-card" style="border-left:5px solid ${rcc};background:#fff;margin-bottom:12px">
+        <div style="font-size:13px;color:#6A7480;margin-bottom:4px">估值修复判定</div>
+        <div style="font-size:20px;font-weight:700;color:${rcc}">${rct}</div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
+        ${chk(rc.valuation_low, '估值低位', 'PE/PB ≤30 历史分位')}
+        ${chk(rc.volume_expand, '量能放大', '近5日均量较前期 +30%')}
+        ${chk(rc.above_ma60, '趋势确认', '站上60日线' + (rc.ma_bullish ? ' + 多头排列' : ''))}
+      </div>`;
+  }
+
+  // 相对强度（场景 D）
+  const rs = m.rs;
+  if (rs && rs.rs != null) {
+    const c = rs.rs >= 0 ? '#0B6E5D' : '#B23A2E';
+    const el = $('#mkt-rs'); el.style.display = 'block';
+    el.innerHTML = `
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
+        <div class="cf-check-card"><div class="cf-check-name">个股 60日涨幅</div>
+          <div class="cf-check-val">${rs.stock_ret >= 0 ? '+' : ''}${rs.stock_ret}%</div></div>
+        <div class="cf-check-card"><div class="cf-check-name">上证 60日涨幅</div>
+          <div class="cf-check-val">${rs.index_ret >= 0 ? '+' : ''}${rs.index_ret}%</div></div>
+        <div class="cf-check-card" style="border-left:3px solid ${c}"><div class="cf-check-name">相对强度 RS</div>
+          <div class="cf-check-val" style="color:${c}">${rs.rs >= 0 ? '+' : ''}${rs.rs}</div>
+          <div class="cf-check-thr">${rs.label}</div></div>
+      </div>`;
+  }
 }
 
 // ── 股票头 ──────────────────────────────────────────────

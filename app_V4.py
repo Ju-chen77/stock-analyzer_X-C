@@ -1170,6 +1170,145 @@ def compute_valuation(code, raw, price):
     }
 
 
+# ═══════════════════════════════════════════════════════════════
+# 量价印证层（市场印证）— 横切基本面，非独立体系
+# ═══════════════════════════════════════════════════════════════
+def compute_market(code, pe_pct=None, pb_pct=None, risk_level=None):
+    """
+    用市场量价行为印证/反驳基本面结论（不预测股价）。
+    数据源：新浪日线（前复权，含换手率）+ 新浪上证指数。
+    资金流向（北向/主力/龙虎榜/融资/大宗）依赖东财 push2 接口，本地代理阻断，暂不接入。
+
+    Args:
+        code: 6 位代码
+        pe_pct / pb_pct: PE/PB 历史分位（来自估值模块），用于「估值低位」判定
+        risk_level: 排雷一票否决结论（PASS/WARNING/FAIL/PREMIUM），用于四象限「基本面」轴
+    Returns: dict {kline, recovery, rs, quadrant, fund_flow_available}
+    """
+    try:
+        df = ak.stock_zh_a_daily(symbol=to_sina_code(code), adjust="qfq")
+    except Exception as e:
+        print(f"[ERR] market daily: {e}")
+        return {}
+    if df is None or df.empty or "close" not in df.columns:
+        return {}
+
+    df = df.copy()
+    df["dt"] = pd.to_datetime(df["date"], errors="coerce")
+    df = df.dropna(subset=["dt", "close"]).sort_values("dt").reset_index(drop=True)
+    if len(df) < 70:
+        return {}
+
+    close = df["close"].astype(float)
+    df["ma5"]  = close.rolling(5).mean()
+    df["ma20"] = close.rolling(20).mean()
+    df["ma60"] = close.rolling(60).mean()
+
+    def _f(v, nd=2):
+        return None if (v is None or pd.isna(v)) else round(float(v), nd)
+
+    # ── 基础行情：近 250 交易日 K 线 + 量 + 均线 + 换手率 ──
+    rec = df.tail(250)
+    has_to = "turnover" in rec.columns
+    kline = {
+        "dates":   rec["dt"].dt.strftime("%Y-%m-%d").tolist(),
+        "open":    [_f(v) for v in rec["open"]],
+        "high":    [_f(v) for v in rec["high"]],
+        "low":     [_f(v) for v in rec["low"]],
+        "close":   [_f(v) for v in rec["close"]],
+        "volume":  [None if pd.isna(v) else float(v) for v in rec["volume"]],
+        "ma5":     [_f(v) for v in rec["ma5"]],
+        "ma20":    [_f(v) for v in rec["ma20"]],
+        "ma60":    [_f(v) for v in rec["ma60"]],
+        "turnover":[_f(v) for v in rec["turnover"]] if has_to else [None] * len(rec),
+    }
+
+    # ── 场景 C：估值修复确认（三重共振）──
+    vol   = df["volume"].astype(float)
+    vol5  = vol.tail(5).mean()
+    vol20 = vol.tail(25).head(20).mean()      # 前期 20 日（剔除最近 5 日）
+    volume_expand = bool(vol20 and vol5 > vol20 * 1.3)
+
+    last = df.iloc[-1]
+    above_ma60 = bool(not pd.isna(last["ma60"]) and last["close"] > last["ma60"])
+    ma_bullish = bool(not pd.isna(last["ma5"]) and not pd.isna(last["ma20"]) and not pd.isna(last["ma60"])
+                      and last["ma5"] > last["ma20"] > last["ma60"])
+    valuation_low = bool((pe_pct is not None and pe_pct <= 30) or
+                         (pb_pct is not None and pb_pct <= 30))
+
+    triggers = []
+    if valuation_low: triggers.append("估值历史低位（PE/PB ≤30 分位）")
+    if volume_expand: triggers.append("近 5 日均量较前期放大 30%+")
+    if above_ma60:    triggers.append("收盘价站上 60 日均线")
+    if ma_bullish:    triggers.append("均线多头排列（MA5>MA20>MA60）")
+
+    if valuation_low and volume_expand and above_ma60:
+        rec_verdict = "RESONANCE_BUY"   # 估值修复启动
+    elif valuation_low and not above_ma60 and not volume_expand:
+        rec_verdict = "VALUE_TRAP"      # 低估但市场不认
+    else:
+        rec_verdict = "NEUTRAL"
+    recovery = {
+        "valuation_low": valuation_low, "volume_expand": volume_expand,
+        "above_ma60": above_ma60, "ma_bullish": ma_bullish,
+        "triggers": triggers, "verdict": rec_verdict,
+        "pe_pct": pe_pct, "pb_pct": pb_pct,
+    }
+
+    # ── 场景 D（部分）：个股相对强度 vs 大盘（上证综指）──
+    def _ret_n(series, n=60):
+        s = series.astype(float).reset_index(drop=True)
+        if len(s) > n and s.iloc[-n - 1] not in (0, None):
+            return (s.iloc[-1] - s.iloc[-n - 1]) / abs(s.iloc[-n - 1])
+        return None
+
+    rs = {}
+    stock_ret = _ret_n(df["close"], 60)
+    try:
+        idx = ak.stock_zh_index_daily(symbol="sh000001")
+        idx = idx.copy()
+        idx["dt"] = pd.to_datetime(idx["date"], errors="coerce")
+        idx = idx.dropna(subset=["dt", "close"]).sort_values("dt")
+        index_ret = _ret_n(idx["close"], 60)
+    except Exception as e:
+        print(f"[ERR] market index: {e}")
+        index_ret = None
+    if stock_ret is not None and index_ret is not None:
+        rs_val = (stock_ret - index_ret) * 100
+        rs = {
+            "window": 60,
+            "stock_ret": round(stock_ret * 100, 1),
+            "index_ret": round(index_ret * 100, 1),
+            "rs": round(rs_val, 1),
+            "label": "跑赢大盘" if rs_val >= 0 else "跑输大盘",
+        }
+
+    # ── 基本面 × 量价 四象限 ──
+    quadrant = {}
+    if risk_level:
+        fund_good = risk_level != "FAIL"
+        mkt_positive = bool(above_ma60 and not pd.isna(last["ma5"]) and not pd.isna(last["ma20"])
+                            and last["ma5"] >= last["ma20"])
+        if fund_good and mkt_positive:
+            q = ("RESONANCE_BUY", "共振做多", "基本面通过 + 市场量价正向 → 最强信号")
+        elif (not fund_good) and mkt_positive:
+            q = ("BUBBLE_WARN", "共振警示", "基本面存疑 + 市场上涨 → 警惕泡沫/炒作")
+        elif fund_good and (not mkt_positive):
+            q = ("VALUE_TRAP", "价值陷阱", "基本面通过 + 市场冷淡 → 待市场确认，或复核基本面")
+        else:
+            q = ("AVOID", "静默回避", "基本面差 + 市场负向 → 避开")
+        quadrant = {"fund_good": fund_good, "market_positive": mkt_positive,
+                    "code": q[0], "label": q[1], "desc": q[2]}
+
+    return {
+        "kline":    kline,
+        "recovery": recovery,
+        "rs":       rs,
+        "quadrant": quadrant,
+        "fund_flow_available": False,   # 北向/主力/龙虎榜/融资：东财 push2 被代理阻断
+    }
+
+
 # 价格与行业信息（复用 V1 逻辑）
 # ═══════════════════════════════════════════════════════════════
 def _get_em_info(code):
@@ -1349,6 +1488,24 @@ def api_analyze():
         "segment":     seg,
     })
 
+
+@app.route("/api/market")
+def api_market():
+    """量价印证层（懒加载，避免拖慢主分析）。"""
+    code = request.args.get("code", "").strip()
+    if not (code.isdigit() and len(code) == 6):
+        return jsonify({"error": "请提供 6 位股票代码"}), 400
+
+    def _fpct(key):
+        v = request.args.get(key)
+        try:
+            return float(v) if v not in (None, "", "null") else None
+        except ValueError:
+            return None
+
+    risk_level = request.args.get("risk") or None
+    market = compute_market(code, _fpct("pe_pct"), _fpct("pb_pct"), risk_level)
+    return jsonify({"market": market})
 
 
 @app.route("/")
