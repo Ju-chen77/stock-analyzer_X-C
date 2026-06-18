@@ -125,13 +125,13 @@ h1{font-family:var(--display);font-weight:700;font-size:clamp(36px,7vw,48px);
 .kpi-card .kunit{font-family:var(--mono);font-size:13px;color:var(--muted2);margin-left:3px}
 
 /* ── 图表容器 ── */
-.chart-wrap{background:#fff;border:none;
+.chart-wrap{background:#fff;border:none;min-width:0;
   border-radius:10px;padding:20px;margin-bottom:20px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
 .chart-title{font-family:var(--display);font-weight:600;font-size:15px;
   margin-bottom:14px;color:var(--ink)}
 .chart-note{font-size:13px;color:var(--muted);margin-top:8px;line-height:1.6}
-.charts-2col{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;margin-bottom:20px}
-.charts-3col{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:20px}
+.charts-2col{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-bottom:20px}
+.charts-3col{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-bottom:20px}
 
 /* ── 排雷仪表盘 ── */
 .dashboard-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-bottom:28px}
@@ -632,9 +632,11 @@ function render(data) {
   _appData = data;
   _renderCache = {};
   renderHeader(data.info);
-  renderTab('t1');
   heroEl.style.display = 'none';
   outEl.style.display = 'block';
+  // 必须先让 outEl 可见，再渲染 Tab1——否则 Plotly 在 display:none 容器中
+  // 读到 offsetWidth=0、回退到默认 ~700px 宽，导致两列栅格被撑出横向滚动条
+  renderTab('t1');
 }
 
 function renderTab(tabId) {
@@ -742,7 +744,7 @@ function renderForecast(fc) {
     Plotly.newPlot('fc-sensitivity', [{
       type:'heatmap', x:xl, y:yl, z:se.matrix,
       text:se.matrix.map(r=>r.map(v=>v==null?'':v)), texttemplate:'%{text}', textfont:{size:12,color:'#1e293b'},
-      colorscale:[[0,'#fecaca'],[0.5,'#fef9c3'],[1,'#bbf7d0']],
+      colorscale:[[0,'#F49096'],[0.5,'#F8D777'],[1,'#8FD3A6']],  // 马卡龙 红→黄→绿（略提饱和）
       showscale:false, xgap:2, ygap:2,
       hovertemplate:'营收增速 %{y}<br>毛利率 %{x}<br>归母净利润 %{z} 亿<extra></extra>',
     }], {
@@ -1158,14 +1160,14 @@ function renderAssetStack(perf) {
   if (!as || !as.periods || !as.periods.length) return;
   const xl = as.periods.map(fmtPeriod).reverse();
   const items = as.items;
-  const COLORS = ['#dc2626','#65a30d','#2563eb','#9333ea','#ea580c','#0d9488','#4f46e5'];
+  const COLORS = ['#F2A6B3','#A8DEC0','#A9C7EC','#C9B6E4','#F7C6A3','#9BD6D2','#F5E1A4'];  // 马卡龙色系（低饱和柔和）
   const keys = Object.keys(items);
   const traces = keys.map((name, i) => ({
     name, type: 'scatter', mode: 'lines', x: xl,
     y: items[name].slice().reverse().map(yi),
     stackgroup: 'one',
-    line: {width: 0.5, color: COLORS[i % COLORS.length]},
-    fillcolor: COLORS[i % COLORS.length] + '66',
+    line: {width: 0},
+    fillcolor: COLORS[i % COLORS.length],
   }));
   Plotly.newPlot('ch-asset-stack', traces, {
     ...LAYOUT_BASE,
@@ -1181,14 +1183,14 @@ function renderLiabilityStack(perf) {
   if (!ls || !ls.periods || !ls.periods.length) return;
   const xl = ls.periods.map(fmtPeriod).reverse();
   const items = ls.items;
-  const COLORS = ['#dc2626','#ea580c','#9333ea','#2563eb','#0d9488'];
+  const COLORS = ['#F2A6B3','#F7C6A3','#C9B6E4','#A9C7EC','#9BD6D2'];  // 马卡龙色系（低饱和柔和）
   const keys = Object.keys(items);
   const traces = keys.map((name, i) => ({
     name, type: 'scatter', mode: 'lines', x: xl,
     y: items[name].slice().reverse().map(yi),
     stackgroup: 'one',
-    line: {width: 0.5, color: COLORS[i % COLORS.length]},
-    fillcolor: COLORS[i % COLORS.length] + '66',
+    line: {width: 0},
+    fillcolor: COLORS[i % COLORS.length],
   }));
   Plotly.newPlot('ch-liab-stack', traces, {
     ...LAYOUT_BASE,
@@ -1432,10 +1434,10 @@ function renderRisk(risk) {
       xgap:3, ygap:3,
       colorscale:[
         [0.0, '#e2e8f0'], [0.25, '#e2e8f0'],
-        [0.25,'#fecaca'], [0.5, '#fecaca'],
-        [0.5, '#fef08a'], [0.75,'#fef08a'],
-        [0.75,'#bbf7d0'], [1.0, '#bbf7d0'],
-      ],
+        [0.25,'#F49096'], [0.5, '#F49096'],
+        [0.5, '#F8D777'], [0.75,'#F8D777'],
+        [0.75,'#8FD3A6'], [1.0, '#8FD3A6'],
+      ],  // 马卡龙 红/黄/绿（与敏感性热力图统一；灰=无数据保留）
       zmin:0, zmax:3, showscale:false, hoverinfo:'y+x',
     }], {
       ...LAYOUT_BASE,
