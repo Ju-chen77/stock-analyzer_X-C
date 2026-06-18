@@ -1185,6 +1185,235 @@ def compute_valuation(code, raw, price):
 
 
 # ═══════════════════════════════════════════════════════════════
+# 盈利预测（业绩检验/归因之后、PE-PB 估值之前的前置环节）
+# ═══════════════════════════════════════════════════════════════
+def compute_forecast(raw, val=None, price=None):
+    """
+    自建盈利预测：历史 CAGR 外推（方法 A）+ 毛利率/费用率/税率/归母比例历史假设，
+    生成三档情景（悲观/基准/乐观）的营收→毛利→费用→税→归母净利润→EPS，
+    并做营收增速 × 毛利率 敏感性矩阵与单变量冲击。永远输出区间，假设全部显式化。
+
+    可行性调整：一致预期（方法 B，stock_profit_forecast_em）与量价模型（方法 C，需销量/ASP）
+    所需数据源在本地代理环境不可用，本模块以方法 A + 历史假设为基础，预期差对比暂缺。
+
+    会计假设：营业利润 ≈ 毛利 − 期间费用 − 税金及附加（保守略去投资收益/营业外）；
+    净利润 = 利润总额 ×(1−有效税率)；归母 = 净利润 × 归母比例。
+    """
+    income = raw.get("income")
+    if income is None:
+        return {}
+    periods = annual_periods(income, 6)
+    if len(periods) < 2:
+        return {}
+
+    rev    = col_vals(income, fcol(income, "营业收入"), periods)
+    cost   = col_vals(income, fcol(income, "营业成本"), periods)
+    taxsur = col_vals(income, fcol(income, "税金及附加", "营业税金及附加"), periods)
+    pretax = col_vals(income, fcol(income, "利润总额"), periods)
+    taxexp = col_vals(income, fcol(income, "所得税费用"), periods)
+    np_tot = col_vals(income, fcol(income, "净利润"), periods)
+    np_par = col_vals(income, fcol(income, "归属于母公司所有者的净利润", "净利润"), periods)
+    eps    = col_vals(income, fcol(income, "基本每股收益", "每股收益"), periods)
+    sell   = col_vals(income, fcol(income, "销售费用"), periods)
+    admin  = col_vals(income, fcol(income, "管理费用"), periods)
+    rd     = col_vals(income, fcol(income, "研发费用"), periods)
+    fin    = col_vals(income, fcol(income, "财务费用"), periods)
+
+    if not rev or rev[0] in (None, 0):
+        return {}
+
+    n = len(periods)
+
+    def _gm(i):
+        return sdiv((rev[i] - cost[i]) if (rev[i] is not None and cost[i] is not None) else None, rev[i])
+    def _exp(i):
+        parts = [sell[i], admin[i], rd[i], fin[i]]
+        if all(p is None for p in parts):
+            return None
+        return sdiv(sum(p for p in parts if p is not None), rev[i])
+    def _mean(fn, k=3):
+        vals = [fn(i) for i in range(min(k, n))]
+        vals = [v for v in vals if v is not None]
+        return (sum(vals) / len(vals)) if vals else None
+
+    gm_hist  = [_gm(i) for i in range(n)]
+    exp_hist = [_exp(i) for i in range(n)]
+
+    # ── 基准假设 ──
+    def _cagr(k):
+        if n > k and rev[k] not in (None, 0) and rev[0] is not None and rev[0] > 0 and rev[k] > 0:
+            return (rev[0] / rev[k]) ** (1 / k) - 1
+        return None
+    cagr3 = _cagr(3)
+    cagr5 = _cagr(5)
+    cands = [c for c in (cagr3, cagr5) if c is not None]
+    rev_growth_base = (sum(cands) / len(cands)) if cands else 0.0
+    rev_growth_base = max(min(rev_growth_base, 1.0), -0.5)   # 防极端值
+
+    gross_margin_base = gm_hist[0] if gm_hist[0] is not None else _mean(_gm, n)
+    exp_hist3 = _mean(_exp, 3)
+
+    # 规模效应摊薄（营收增速越高，期间费用率摊薄越多，单位 pct）
+    g = rev_growth_base
+    if   g < 0.10: dampen = 0.0
+    elif g < 0.30: dampen = 0.0035
+    elif g < 0.60: dampen = 0.0075
+    else:          dampen = 0.015
+    expense_ratio_base = max((exp_hist3 - dampen), 0.0) if exp_hist3 is not None else None
+
+    taxsur_rate = _mean(lambda i: sdiv(taxsur[i], rev[i]), 3) or 0.0
+    eff_tax = _mean(lambda i: sdiv(taxexp[i], pretax[i]), 3)
+    eff_tax = min(max(eff_tax, 0.0), 0.40) if eff_tax is not None else 0.25
+    parent_ratio = _mean(lambda i: sdiv(np_par[i], np_tot[i]), 3)
+    parent_ratio = min(max(parent_ratio, 0.0), 1.2) if parent_ratio is not None else 1.0
+
+    rev0, eps0, np_par0 = rev[0], eps[0], np_par[0]
+
+    # 归母净利率锚：直接用当前实际归母净利率作基准（缺失退 3 年均值）。
+    # 比自下而上 营收×毛利率−费用−税 更稳健——后者对投资收益/减值/少数股东
+    # 损益占比大的控股型公司（如 TCL）会系统性失真。情景在此锚上按
+    # 毛利率/费用率偏离（税后）调整净利率。
+    base_net_margin = sdiv(np_par0, rev0)
+    if base_net_margin is None:
+        base_net_margin = _mean(lambda i: sdiv(np_par[i], rev[i]), 3)
+
+    def _derive(growth, gmargin, expense):
+        """给定营收增速/毛利率/期间费用率 → 归母净利润(元) 与 EPS(元)"""
+        if base_net_margin is None or gmargin is None or expense is None \
+           or gross_margin_base is None or expense_ratio_base is None:
+            return rev0 * (1 + growth) if rev0 else None, None, None
+        revenue1 = rev0 * (1 + growth)
+        # 相对基准的毛利率↑/费用率↓ → 税前利润率改善，乘 (1−有效税率) 落到净利率
+        d_pretax = (gmargin - gross_margin_base) - (expense - expense_ratio_base)
+        net_margin = base_net_margin + d_pretax * (1 - eff_tax)
+        parent = revenue1 * net_margin
+        eps1 = (eps0 * parent / np_par0) if (eps0 not in (None, 0) and np_par0 not in (None, 0)) else None
+        return revenue1, parent, eps1
+
+    pe_median = (val or {}).get("pe_median")
+
+    # ── 三档情景 ──
+    SCEN = [
+        ("悲观", rev_growth_base - 0.10, (gross_margin_base - 0.02) if gross_margin_base is not None else None,
+         (expense_ratio_base + 0.005) if expense_ratio_base is not None else None),
+        ("基准", rev_growth_base, gross_margin_base, expense_ratio_base),
+        ("乐观", rev_growth_base + 0.10, (gross_margin_base + 0.015) if gross_margin_base is not None else None,
+         (expense_ratio_base - 0.01) if expense_ratio_base is not None else None),
+    ]
+    scenarios = []
+    for name, gth, gm, ex in SCEN:
+        revenue1, parent, eps1 = _derive(gth, gm, ex)
+        fwd_pe = sdiv(price, eps1) if (price and eps1 and eps1 > 0) else None
+        target = (eps1 * pe_median) if (eps1 and pe_median) else None
+        scenarios.append({
+            "name": name,
+            "rev_growth":   round(gth * 100, 1),
+            "revenue":      round(revenue1 / 1e8, 1) if revenue1 is not None else None,
+            "gross_margin": round(gm * 100, 1) if gm is not None else None,
+            "expense_ratio":round(ex * 100, 1) if ex is not None else None,
+            "net_profit":   round(parent / 1e8, 1) if parent is not None else None,
+            "eps":          round(eps1, 2) if eps1 is not None else None,
+            "fwd_pe":       round(fwd_pe, 1) if fwd_pe else None,
+            "target":       round(target, 2) if target else None,
+        })
+
+    # ── 基准情景 3 年轨迹（复利）──
+    traj = {"years": [], "revenue": [], "net_profit": [], "eps": []}
+    for t in (1, 2, 3):
+        gth = (1 + rev_growth_base) ** t - 1
+        revenue_t, parent_t, eps_t = _derive(gth, gross_margin_base, expense_ratio_base)
+        traj["years"].append(f"T+{t}")
+        traj["revenue"].append(round(revenue_t / 1e8, 1) if revenue_t is not None else None)
+        traj["net_profit"].append(round(parent_t / 1e8, 1) if parent_t is not None else None)
+        traj["eps"].append(round(eps_t, 2) if eps_t is not None else None)
+
+    # ── 敏感性矩阵：营收增速 × 毛利率 → 归母净利润(亿) ──
+    sensitivity = {}
+    if gross_margin_base is not None and expense_ratio_base is not None:
+        rg = [rev_growth_base + d for d in (-0.20, -0.10, 0.0, 0.10, 0.20)]
+        gms = [gross_margin_base + d for d in (-0.02, -0.01, 0.0, 0.01, 0.02)]
+        matrix = []
+        for gth in rg:
+            row = []
+            for gm in gms:
+                _, parent, _ = _derive(gth, gm, expense_ratio_base)
+                row.append(round(parent / 1e8, 1) if parent is not None else None)
+            matrix.append(row)
+        sensitivity = {
+            "rev_growths":   [round(x * 100, 1) for x in rg],
+            "gross_margins": [round(x * 100, 1) for x in gms],
+            "matrix":        matrix, "base_i": 2, "base_j": 2,
+        }
+
+    # ── 单变量冲击（相对基准的归母净利润变化）──
+    shocks = []
+    _, base_np, _ = _derive(rev_growth_base, gross_margin_base, expense_ratio_base)
+    if base_np:
+        def _shock(label, gth, gm, ex):
+            _, np_s, _ = _derive(gth, gm, ex)
+            if np_s is None:
+                return
+            shocks.append({"var": label,
+                           "net_profit": round(np_s / 1e8, 1),
+                           "delta": round((np_s - base_np) / abs(base_np) * 100, 1)})
+        _shock("营收增速 +10pct", rev_growth_base + 0.10, gross_margin_base, expense_ratio_base)
+        _shock("毛利率 +2pct",    rev_growth_base, (gross_margin_base + 0.02) if gross_margin_base is not None else None, expense_ratio_base)
+        _shock("期间费用率 +1pct", rev_growth_base, gross_margin_base, (expense_ratio_base + 0.01) if expense_ratio_base is not None else None)
+        _shock("有效税率 +2pct",  rev_growth_base, gross_margin_base, expense_ratio_base)  # 见下：税率单独处理
+
+    # 税率冲击单独算（_derive 用固定 eff_tax，这里手动按净利率缩放）
+    if base_np and base_net_margin not in (None, 0):
+        revenue1 = rev0 * (1 + rev_growth_base)
+        nm_tax = base_net_margin * (1 - min(eff_tax + 0.02, 0.40)) / (1 - eff_tax)
+        np_tax = revenue1 * nm_tax
+        for s in shocks:
+            if s["var"] == "有效税率 +2pct":
+                s["net_profit"] = round(np_tax / 1e8, 1)
+                s["delta"] = round((np_tax - base_np) / abs(base_np) * 100, 1)
+
+    asc = list(range(n - 1, -1, -1))   # 升序索引
+    history = {
+        "periods":       [periods[i] for i in asc],
+        "revenue":       [round(rev[i] / 1e8, 1) if rev[i] is not None else None for i in asc],
+        "gross_margin":  [round(gm_hist[i] * 100, 1) if gm_hist[i] is not None else None for i in asc],
+        "expense_ratio": [round(exp_hist[i] * 100, 1) if exp_hist[i] is not None else None for i in asc],
+        "net_profit":    [round(np_par[i] / 1e8, 1) if np_par[i] is not None else None for i in asc],
+        "eps":           [round(eps[i], 2) if eps[i] is not None else None for i in asc],
+    }
+
+    return {
+        "base_period": periods[0],
+        "history":     history,
+        "assumptions": {
+            "rev_cagr_3y":        round(cagr3 * 100, 1) if cagr3 is not None else None,
+            "rev_cagr_5y":        round(cagr5 * 100, 1) if cagr5 is not None else None,
+            "rev_growth_base":    round(rev_growth_base * 100, 1),
+            "gross_margin_base":  round(gross_margin_base * 100, 1) if gross_margin_base is not None else None,
+            "expense_ratio_hist3":round(exp_hist3 * 100, 1) if exp_hist3 is not None else None,
+            "scale_dampen":       round(dampen * 100, 2),
+            "expense_ratio_base": round(expense_ratio_base * 100, 1) if expense_ratio_base is not None else None,
+            "taxsur_rate":        round(taxsur_rate * 100, 2),
+            "base_net_margin":    round(base_net_margin * 100, 2) if base_net_margin is not None else None,
+            "effective_tax_rate": round(eff_tax * 100, 1),
+            "parent_ratio":       round(parent_ratio * 100, 1),
+        },
+        "current": {
+            "period": periods[0],
+            "revenue":    round(rev0 / 1e8, 1),
+            "net_profit": round(np_par0 / 1e8, 1) if np_par0 is not None else None,
+            "eps":        round(eps0, 2) if eps0 is not None else None,
+        },
+        "scenarios":   scenarios,
+        "trajectory":  traj,
+        "sensitivity": sensitivity,
+        "shocks":      shocks,
+        "valuation_link": {"pe_median": round(pe_median, 1) if pe_median else None, "price": price},
+        "note": "方法 B（一致预期）与方法 C（量价模型）所需数据源（stock_profit_forecast_em / 销量·ASP）"
+                "在本地代理环境不可用，预期差对比暂缺；本预测基于方法 A（历史 CAGR）+ 历史假设外推。",
+    }
+
+
+# ═══════════════════════════════════════════════════════════════
 # 量价印证层（市场印证）— 横切基本面，非独立体系
 # ═══════════════════════════════════════════════════════════════
 def compute_market(code, pe_pct=None, pb_pct=None, risk_level=None):
@@ -1491,6 +1720,7 @@ def api_analyze():
     attr  = compute_attribution(raw)
     risk  = compute_risk(raw)
     val   = compute_valuation(code, raw, price)
+    fcst  = compute_forecast(raw, val, price)
     seg   = _fetch_segment_revenue(code)
 
     return jsonify({
@@ -1499,6 +1729,7 @@ def api_analyze():
         "attribution": attr,
         "risk":        risk,
         "valuation":   val,
+        "forecast":    fcst,
         "segment":     seg,
     })
 

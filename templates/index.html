@@ -207,7 +207,8 @@ footer{width:100%;max-width:980px;margin:0 auto;font-family:var(--mono);font-siz
       <button class="tab-btn"        data-tab="t2">② 业绩归因</button>
       <button class="tab-btn"        data-tab="t3">③ 验证排雷</button>
       <button class="tab-btn"        data-tab="t4">④ 估值区间</button>
-      <button class="tab-btn"        data-tab="t5">⑤ 量价印证</button>
+      <button class="tab-btn"        data-tab="t6">⑤ 盈利预测</button>
+      <button class="tab-btn"        data-tab="t5">⑥ 量价印证</button>
     </nav>
 
     <!-- ── Tab 1：业绩检验 ── -->
@@ -414,6 +415,52 @@ footer{width:100%;max-width:980px;margin:0 auto;font-family:var(--mono);font-siz
       </p>
     </div>
 
+    <!-- ── Tab 6：盈利预测 ── -->
+    <div class="tab-panel" id="t6">
+      <p class="chart-note" style="margin:0 2px 16px;line-height:1.7">
+        盈利预测只输出<b>区间与情景</b>，不做单点预测：用历史 CAGR + 显式假设推出三档 EPS，喂入估值模型。
+        估值不确定性 80% 来自预测假设——故所有假设均<b>显式列出</b>，便于复盘。
+      </p>
+
+      <!-- 关键假设（显式化） -->
+      <p class="sec-label">关键假设 · 全部显式化（基于历史，可复盘）</p>
+      <div class="dashboard-grid" id="fc-assumptions"></div>
+
+      <!-- 三档情景 -->
+      <p class="sec-label" style="margin-top:28px">三档情景预测 · 悲观 / 基准 / 乐观</p>
+      <table class="dupont-table" id="fc-scenario-table"></table>
+      <div class="chart-wrap" style="margin-top:14px">
+        <div class="chart-title">三档情景：归母净利润（亿元）与 EPS（元）</div>
+        <div id="fc-scenario-chart" style="height:280px"></div>
+      </div>
+
+      <!-- 基准 3 年轨迹 -->
+      <p class="sec-label" style="margin-top:28px">基准情景 · 未来 3 年轨迹（复利外推）</p>
+      <div class="chart-wrap">
+        <div class="chart-title">历史 + 基准预测：营收 & 归母净利润（亿元）</div>
+        <div id="fc-trajectory" style="height:280px"></div>
+        <div class="chart-note">实线=历史，虚线=基准情景外推；轨迹仅供参考，越远越不确定</div>
+      </div>
+
+      <!-- 敏感性矩阵 -->
+      <p class="sec-label" style="margin-top:28px">敏感性矩阵 · 营收增速 × 毛利率 → 归母净利润（亿元）</p>
+      <div class="chart-wrap">
+        <div class="chart-title">5×5 敏感性热力图（中心为基准）</div>
+        <div id="fc-sensitivity" style="height:360px"></div>
+        <div class="chart-note">毛利率假设错 2pct 往往比营收错 10% 影响更大——预测精力应优先放在毛利率</div>
+      </div>
+
+      <!-- 单变量冲击 -->
+      <p class="sec-label" style="margin-top:28px">单变量冲击 · 各假设单独变动对归母净利润的影响</p>
+      <div class="chart-wrap">
+        <div class="chart-title">假设冲击 → 归母净利润变化 %</div>
+        <div id="fc-shocks" style="height:240px"></div>
+      </div>
+
+      <!-- 数据源说明 -->
+      <div class="chart-note" style="margin:20px 2px 8px;line-height:1.7" id="fc-note"></div>
+    </div>
+
     <!-- ── Tab 5：量价印证 ── -->
     <div class="tab-panel" id="t5">
       <p class="chart-note" style="margin:0 2px 16px;line-height:1.7">
@@ -559,7 +606,130 @@ function renderTab(tabId) {
   if (tabId === 't2') renderAttribution(_appData.attribution);
   if (tabId === 't3') renderRisk(_appData.risk);
   if (tabId === 't4') renderValuation(_appData.valuation);
+  if (tabId === 't6') renderForecast(_appData.forecast);
   if (tabId === 't5') loadMarket();
+}
+
+// ── 盈利预测 ──────────────────────────────────────────────
+function renderForecast(fc) {
+  if (!fc || !fc.scenarios || !fc.scenarios.length) {
+    $('#fc-assumptions').innerHTML =
+      '<div class="chart-note" style="grid-column:1/-1">盈利预测数据不足（历史年报不足或缺关键科目）</div>';
+    return;
+  }
+  const a = fc.assumptions || {};
+  const pp = v => v == null ? '—' : v + '%';
+
+  // 关键假设卡片
+  const cards = [
+    {t:'营收增速（基准）', v: pp(a.rev_growth_base), s:`3年CAGR ${pp(a.rev_cagr_3y)} ｜ 5年 ${pp(a.rev_cagr_5y)}`},
+    {t:'毛利率（基准）',   v: pp(a.gross_margin_base), s:'最近一年直接外推'},
+    {t:'期间费用率（基准）', v: pp(a.expense_ratio_base), s:`历史3年 ${pp(a.expense_ratio_hist3)} − 规模摊薄 ${a.scale_dampen}pct`},
+    {t:'归母净利率（锚）', v: pp(a.base_net_margin), s:'当前实际归母/营收，情景在此基础上调整'},
+    {t:'有效税率',  v: pp(a.effective_tax_rate), s:'历史3年实际税率（用于毛利率/费用率偏离的税后折算）'},
+  ];
+  $('#fc-assumptions').innerHTML = cards.map(c =>
+    `<div class="dash-card">
+       <div class="d-head"><span class="d-name">${c.t}</span></div>
+       <div class="d-val">${c.v}</div>
+       <div class="d-signal">${c.s}</div>
+     </div>`).join('');
+
+  // 三档情景表
+  const sc = fc.scenarios;
+  const cur = fc.current || {};
+  const head = ['情景','营收增速','营收(亿)','毛利率','费用率','归母净利润(亿)','EPS(元)','对应PE','目标价(元)'];
+  const rowOf = s => [s.name, pp(s.rev_growth), s.revenue ?? '—', pp(s.gross_margin),
+                      pp(s.expense_ratio), s.net_profit ?? '—', s.eps ?? '—',
+                      s.fwd_pe ? s.fwd_pe+'×' : '—', s.target ?? '—'];
+  const curRow = ['当前('+fmtPeriod(cur.period||'')+')','—', cur.revenue ?? '—','—','—',
+                  cur.net_profit ?? '—', cur.eps ?? '—','—','—'];
+  const thead = `<tr>${head.map(h=>`<th>${h}</th>`).join('')}</tr>`;
+  const allRows = [curRow, ...sc.map(rowOf)];
+  const tbody = allRows.map((r,ri) =>
+    `<tr${ri===0?' style="color:#6A7480"':''}>${r.map((v,i)=>`<td ${i===0?'style="text-align:left"':''}>${v}</td>`).join('')}</tr>`
+  ).join('');
+  $('#fc-scenario-table').innerHTML = `<thead>${thead}</thead><tbody>${tbody}</tbody>`;
+
+  // 三档情景图：归母净利润柱 + EPS 线
+  const names = sc.map(s=>s.name);
+  Plotly.newPlot('fc-scenario-chart', [
+    {name:'归母净利润', type:'bar', x:names, y:sc.map(s=>s.net_profit),
+      marker:{color:[C.red, C.teal, C.amber]}, yaxis:'y',
+      text: sc.map(s=>s.net_profit==null?'':s.net_profit), textposition:'outside'},
+    {name:'EPS', type:'scatter', mode:'lines+markers', x:names, y:sc.map(s=>s.eps),
+      line:{color:C.blue,width:2.5}, marker:{size:8}, yaxis:'y2'},
+  ], {
+    ...LAYOUT_BASE,
+    xaxis:{type:'category', tickfont:{size:12}},
+    yaxis:{title:'归母净利润(亿)', gridcolor:'#F0F2F4'},
+    yaxis2:{title:'EPS(元)', overlaying:'y', side:'right', showgrid:false},
+    margin:{t:20,r:52,b:36,l:56},
+  }, PLOTLY_CFG);
+
+  // 历史 + 基准 3 年轨迹
+  const h = fc.history || {};
+  const tj = fc.trajectory || {};
+  const histX = (h.periods||[]).map(fmtPeriod);
+  const trajX = tj.years || [];
+  const allX  = histX.concat(trajX);
+  const nH = histX.length, nT = trajX.length;
+  const pad = arr => arr.concat(Array(nT).fill(null));
+  const padFront = arr => Array(nH).fill(null).concat(arr);
+  // 让虚线从最后一个历史点连起来
+  const lastHistRev = (h.revenue||[])[nH-1], lastHistNp = (h.net_profit||[])[nH-1];
+  const trajRevLine = padFront(tj.revenue||[]); if(nH) trajRevLine[nH-1]=lastHistRev;
+  const trajNpLine  = padFront(tj.net_profit||[]); if(nH) trajNpLine[nH-1]=lastHistNp;
+  Plotly.newPlot('fc-trajectory', [
+    {name:'营收(历史)', type:'scatter', mode:'lines+markers', x:allX, y:pad(h.revenue||[]),
+      line:{color:C.teal,width:2.5}, marker:{size:5}},
+    {name:'营收(预测)', type:'scatter', mode:'lines+markers', x:allX, y:trajRevLine,
+      line:{color:C.teal,width:2,dash:'dot'}, marker:{size:5}},
+    {name:'归母净利润(历史)', type:'scatter', mode:'lines+markers', x:allX, y:pad(h.net_profit||[]),
+      line:{color:C.amber,width:2.5}, marker:{size:5}},
+    {name:'归母净利润(预测)', type:'scatter', mode:'lines+markers', x:allX, y:trajNpLine,
+      line:{color:C.amber,width:2,dash:'dot'}, marker:{size:5}},
+  ], {
+    ...LAYOUT_BASE,
+    xaxis:{type:'category', tickfont:{size:11}},
+    yaxis:{title:'亿元', gridcolor:'#F0F2F4'},
+    margin:{t:10,r:20,b:36,l:56},
+  }, PLOTLY_CFG);
+
+  // 敏感性矩阵热力图
+  const se = fc.sensitivity;
+  if (se && se.matrix && se.matrix.length) {
+    const xl = se.gross_margins.map(v=>'毛'+v+'%');
+    const yl = se.rev_growths.map(v=>'营'+v+'%');
+    Plotly.newPlot('fc-sensitivity', [{
+      type:'heatmap', x:xl, y:yl, z:se.matrix,
+      text:se.matrix.map(r=>r.map(v=>v==null?'':v)), texttemplate:'%{text}', textfont:{size:11},
+      colorscale:[[0,'#FBE7E4'],[0.5,'#FBF3E0'],[1,'#E0F0EB']],
+      showscale:false, xgap:2, ygap:2,
+      hovertemplate:'营收增速 %{y}<br>毛利率 %{x}<br>归母净利润 %{z} 亿<extra></extra>',
+    }], {
+      ...LAYOUT_BASE,
+      margin:{t:10,r:10,b:40,l:70},
+      yaxis:{tickfont:{size:11}}, xaxis:{side:'top', tickfont:{size:11}},
+    }, PLOTLY_CFG);
+  }
+
+  // 单变量冲击
+  const sh = fc.shocks || [];
+  if (sh.length) {
+    Plotly.newPlot('fc-shocks', [{
+      type:'bar', orientation:'h',
+      y: sh.map(s=>s.var), x: sh.map(s=>s.delta),
+      marker:{color: sh.map(s=>s.delta>=0?C.teal:C.red)},
+      text: sh.map(s=>(s.delta>=0?'+':'')+s.delta+'%'), textposition:'outside',
+    }], {
+      ...LAYOUT_BASE,
+      margin:{t:10,r:40,b:36,l:120},
+      xaxis:{title:'归母净利润变化 %', gridcolor:'#F0F2F4', zeroline:true, zerolinecolor:'#C8CED6'},
+    }, PLOTLY_CFG);
+  }
+
+  $('#fc-note').innerHTML = '💡 ' + (fc.note || '');
 }
 
 // ── 第五段：量价印证（懒加载）──────────────────────────────
