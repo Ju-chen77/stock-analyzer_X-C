@@ -1,3 +1,17 @@
+import os
+
+# === 强制所有 HTTP 请求直连，不走代理 ===
+# 因为本应用访问的都是国内财经 API，走代理会失败
+os.environ['NO_PROXY'] = '*'
+os.environ['no_proxy'] = '*'
+os.environ.pop('HTTP_PROXY', None)
+os.environ.pop('HTTPS_PROXY', None)
+os.environ.pop('http_proxy', None)
+os.environ.pop('https_proxy', None)
+# === 结束 ===
+
+# 你原本的 imports 从这里开始
+from flask import Flask
 # -*- coding: utf-8 -*-
 """
 app_V4.py — A 股四段式财务分析
