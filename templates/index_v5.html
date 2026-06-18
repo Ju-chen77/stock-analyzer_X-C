@@ -1,0 +1,1600 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ project_name }}</title>
+<script src="https://cdn.plot.ly/plotly-2.27.0.min.js" charset="utf-8"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#faf8f5; --bg-deep:#f5f2ed; --bg-content:#faf8f5;
+  --surface:#ffffff; --surface-border:#d1d5db;
+  --ink:#0f172a; --muted:#64748b; --muted2:#94a3b8;
+  --accent:#2563eb; --accent-soft:rgba(37,99,235,.07);
+  --red:#dc2626; --red-soft:#fef2f2; --red-ink:#991b1b;
+  --yellow:#d97706; --yellow-soft:#fffbeb; --yellow-ink:#92400e;
+  --green:#16a34a; --green-soft:#f0fdf4; --green-ink:#14532d;
+  --line:#e2e8f0;
+  --display:'Space Grotesk',sans-serif;
+  --body:'IBM Plex Mono',ui-monospace,monospace;
+  --mono:'IBM Plex Mono',ui-monospace,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:var(--bg);color:var(--ink);font-family:var(--body);
+  font-size:13px;line-height:1.6;-webkit-font-smoothing:antialiased}
+
+/* ── Landing：垂直居中 ── */
+.app{min-height:100vh;display:flex;flex-direction:column;justify-content:center;
+  align-items:center;padding:32px 20px;transition:all .3s}
+.app.searched{justify-content:flex-start;padding:0}
+
+/* ── Hero ── */
+.hero{width:100%;max-width:500px;text-align:center}
+.eyebrow{font-family:var(--mono);font-size:14px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--accent);margin-bottom:12px;
+  display:flex;align-items:center;justify-content:center;gap:10px}
+.eyebrow::before{content:'';width:10px;height:10px;border-radius:50%;background:var(--accent)}
+h1{font-family:var(--display);font-weight:700;font-size:clamp(36px,7vw,48px);
+  letter-spacing:-.02em;margin:0 0 32px;line-height:1.1;color:var(--ink)}
+
+/* ── 搜索框 ── */
+.searchbar{display:flex;gap:0;background:#fff;
+  border:1px solid #d5cfc7;border-radius:10px;padding:6px 6px 6px 20px;
+  box-shadow:0 1px 3px rgba(0,0,0,.06)}
+.searchbar:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px rgba(37,99,235,.12)}
+.searchbar input{flex:1;border:0;outline:0;font-family:var(--mono);
+  font-size:15px;background:transparent;color:var(--ink)}
+.searchbar input::placeholder{color:var(--muted2)}
+.searchbar button{font-family:var(--mono);font-weight:600;font-size:15px;
+  border:0;background:var(--accent);color:#fff;padding:10px 28px;border-radius:8px;cursor:pointer}
+.searchbar button:hover{background:#1d4ed8}
+.hint{font-family:var(--mono);font-size:13px;color:var(--muted2);margin-top:14px}
+
+.state-msg{margin-top:20px;font-family:var(--mono);font-size:14px;color:var(--muted)}
+.state-msg.err{color:#dc2626}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;
+  background:var(--accent);margin-right:8px;animation:pulse 1s infinite}
+@keyframes pulse{0%,100%{opacity:.3}50%{opacity:1}}
+
+/* ── 结果区：全屏布局 ── */
+#out{display:none;width:100%}
+
+/* ── 顶栏 ── */
+.topbar{background:var(--bg-deep);padding:16px 28px;display:flex;align-items:center;gap:16px;
+  border-bottom:1px solid #e8e4de}
+.topbar .logo{display:flex;align-items:center;gap:10px}
+.topbar .logo::before{content:'';width:10px;height:10px;border-radius:50%;background:var(--accent)}
+.topbar .logo-text{font-family:var(--display);font-size:22px;font-weight:600;color:var(--ink);letter-spacing:.03em}
+.topbar .search-mini{margin-left:auto;display:flex;align-items:center;gap:0;
+  background:#faf8f5;border:1px solid #d5cfc7;
+  border-radius:8px;padding:5px 5px 5px 16px}
+.topbar .search-mini input{border:0;outline:0;background:transparent;font-family:var(--mono);
+  font-size:14px;color:var(--ink);width:200px}
+.topbar .search-mini input::placeholder{color:var(--muted2)}
+.topbar .search-mini button{background:var(--accent);color:#fff;font-size:14px;font-weight:600;
+  padding:5px 18px;border:0;border-radius:6px;cursor:pointer}
+
+/* ── 股票信息栏 ── */
+.stockbar{background:var(--bg-deep);padding:16px 28px;display:flex;align-items:center;gap:16px;
+  border-bottom:1px solid #e8e4de}
+.stockbar .sname{font-family:var(--display);font-weight:600;font-size:26px;color:var(--ink)}
+.stockbar .scode{font-family:var(--mono);font-weight:500;font-size:16px;color:var(--muted)}
+.stockbar .smeta{margin-left:auto;font-family:var(--mono);font-size:14px;color:var(--muted)}
+.stockbar .smeta b{color:var(--ink)}
+.stockbar .smeta .hl{color:var(--accent)}
+
+/* ── 主体：侧栏 + 内容 ── */
+.main-body{display:flex;min-height:calc(100vh - 120px)}
+
+/* ── 左侧栏 Tab ── */
+.sidebar{width:190px;background:var(--bg-deep);border-right:1px solid #e8e4de;
+  padding:14px 0;flex-shrink:0;display:flex;flex-direction:column;gap:2px;
+  position:sticky;top:0;height:100vh;overflow-y:auto}
+.sidebar .tab-btn{display:flex;align-items:center;gap:10px;padding:13px 20px;
+  border:0;border-left:3px solid transparent;background:transparent;
+  cursor:pointer;font-family:var(--body);font-size:14px;color:var(--muted);
+  text-align:left;width:100%;transition:all .15s}
+.sidebar .tab-btn:hover{background:#f5f2ed;color:var(--ink)}
+.sidebar .tab-btn.active{background:var(--accent-soft);border-left-color:var(--accent);color:var(--accent);font-weight:600}
+.sidebar .tab-btn .ico{font-size:18px;width:22px;text-align:center;flex-shrink:0}
+.sidebar .ver{margin-top:auto;padding:14px 20px;border-top:1px solid var(--line);
+  font-family:var(--mono);font-size:12px;color:var(--muted2)}
+
+/* ── 内容区 ── */
+.content{flex:1;background:var(--bg-content);padding:28px 32px;overflow-y:auto}
+.tab-panel{display:none}
+.tab-panel.active{display:block}
+
+/* ── 区块标题 ── */
+.sec-label{font-family:var(--mono);font-size:12px;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--muted);margin:0 0 12px}
+.sec-title{font-family:var(--display);font-weight:600;font-size:18px;
+  margin:32px 0 6px;color:var(--ink)}
+.sec-sub{color:var(--muted);font-size:14px;margin:0 0 18px}
+
+/* ── KPI 卡片行 ── */
+.kpi-row{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-bottom:28px}
+.kpi-card{background:#fff;border:none;
+  border-radius:10px;padding:16px 18px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+.kpi-card .ktag{font-family:var(--mono);font-size:13px;
+  color:var(--muted);margin-bottom:6px}
+.kpi-card .kval{font-family:var(--display);font-weight:500;font-size:22px;color:var(--ink)}
+.kpi-card .kunit{font-family:var(--mono);font-size:13px;color:var(--muted2);margin-left:3px}
+
+/* ── 图表容器 ── */
+.chart-wrap{background:#fff;border:none;
+  border-radius:10px;padding:20px;margin-bottom:20px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+.chart-title{font-family:var(--display);font-weight:600;font-size:15px;
+  margin-bottom:14px;color:var(--ink)}
+.chart-note{font-size:13px;color:var(--muted);margin-top:8px;line-height:1.6}
+.charts-2col{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;margin-bottom:20px}
+.charts-3col{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:20px}
+
+/* ── 排雷仪表盘 ── */
+.dashboard-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-bottom:28px}
+.dash-card{background:#fff;border:none;
+  border-radius:10px;padding:16px 14px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+.dash-card .d-head{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.dash-card .d-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+.d-dot.green{background:#22c55e}
+.d-dot.yellow{background:#f59e0b}
+.d-dot.red{background:#ef4444}
+.d-dot.grey{background:#cbd5e1}
+.dash-card .d-name{font-family:var(--display);font-weight:500;font-size:14px;color:var(--ink)}
+.dash-card .d-val{font-family:var(--mono);font-weight:600;font-size:22px;margin-bottom:4px;color:var(--ink)}
+.dash-card.green{background:#f0fdf4;border:none;border-left:3px solid #22c55e}
+.dash-card.green .d-name,.dash-card.green .d-val,.dash-card.green .d-unit,.dash-card.green .d-signal{color:#14532d}
+.dash-card.yellow{background:#fffbeb;border:none;border-left:3px solid #f59e0b}
+.dash-card.yellow .d-name,.dash-card.yellow .d-val,.dash-card.yellow .d-unit,.dash-card.yellow .d-signal{color:#78350f}
+.dash-card.red{background:#fef2f2;border:none;border-left:3px solid #ef4444}
+.dash-card.red .d-name,.dash-card.red .d-val,.dash-card.red .d-unit,.dash-card.red .d-signal{color:#7f1d1d}
+.dash-card .d-unit{font-family:var(--mono);font-size:12px;color:var(--muted);margin-bottom:8px}
+.dash-card .d-desc{font-size:13px;color:var(--muted);line-height:1.4}
+.dash-card .d-signal{font-family:var(--mono);font-size:12px;color:var(--muted);
+  margin-top:8px;padding-top:8px;border-top:1px dashed var(--line)}
+
+/* ── 杜邦表格 ── */
+.dupont-table{width:100%;border-collapse:collapse;font-size:14px;margin-bottom:20px}
+.dupont-table th{background:#f5f2ed;font-family:var(--mono);font-size:12px;
+  font-weight:600;color:var(--muted);padding:10px 12px;text-align:right;
+  border-bottom:1px solid #e8e4de}
+.dupont-table th:first-child{text-align:left}
+.dupont-table td{padding:10px 12px;text-align:right;font-family:var(--mono);color:var(--ink);
+  border-bottom:1px solid var(--line)}
+.dupont-table td:first-child{text-align:left;font-weight:500;font-family:var(--body)}
+.dupont-table tr:last-child td{border-bottom:0}
+
+/* ── 杜邦贡献度卡片 ── */
+.contrib-card{background:#fff;border:none;
+  border-radius:10px;padding:16px 20px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+.contrib-item{min-width:100px}
+.contrib-label{font-size:13px;color:var(--muted);margin-bottom:2px}
+.contrib-val{font-family:var(--mono);font-size:18px;font-weight:600}
+
+/* ── 三类现金流组合标签条 ── */
+.cfpattern-strip{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:6px;
+  margin:10px 10px 0 52px;padding-top:10px;border-top:1px dashed #e2e8f0}
+.cfp-cell{text-align:center}
+.cfp-year{font-family:var(--mono);font-size:12px;color:var(--muted)}
+.cfp-signs{font-family:var(--mono);font-size:18px;font-weight:700;letter-spacing:2px;color:var(--ink)}
+.cfp-label{font-size:12px;font-weight:600;line-height:1.3}
+
+/* ── 排雷总判定卡片 ── */
+.risk-verdict-card{border-radius:10px;padding:18px 22px;margin-bottom:8px;
+  background:#fff;border:none;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+.risk-tally{font-family:var(--mono);font-size:14px;color:var(--muted);margin-left:auto}
+
+/* ── 现金流验证卡片 ── */
+.cf-check-card{background:#fff;border:none;
+  border-radius:10px;padding:14px 16px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+.cf-check-ico{font-size:22px;margin-bottom:6px}
+.cf-check-name{font-family:var(--display);font-weight:500;font-size:14px;margin-bottom:2px;color:var(--ink)}
+.cf-check-desc{font-size:13px;color:var(--muted);margin-bottom:8px}
+.cf-check-val{font-family:var(--mono);font-size:22px;font-weight:700;margin-bottom:4px;color:var(--ink)}
+.cf-check-thr{font-size:12px;color:var(--muted)}
+
+footer{width:100%;font-family:var(--mono);font-size:12px;
+  color:var(--muted2);text-align:center;padding:16px 28px;border-top:1px solid #e8e4de;
+  background:var(--bg-deep)}
+
+@media(max-width:720px){
+  .kpi-row{grid-template-columns:repeat(3,1fr)}
+  .dashboard-grid{grid-template-columns:repeat(2,1fr)}
+  .charts-2col{grid-template-columns:1fr}
+  .charts-3col{grid-template-columns:1fr}
+  .sidebar{width:60px}
+  .sidebar .tab-btn span:not(.ico){display:none}
+  .sidebar .tab-btn{justify-content:center;padding:13px 0}
+  .sidebar .ver{display:none}
+}
+</style>
+</head>
+<body>
+<div class="app" id="app">
+
+  <!-- ── 搜索主页 ── -->
+  <header class="hero" id="hero">
+    <div class="eyebrow">Stock Analyzer</div>
+    <h1>{{ project_name }}</h1>
+    <div class="searchbar">
+      <input id="q" placeholder="输入股票代码  如 600519" autocomplete="off" autofocus>
+      <button id="go">分析</button>
+    </div>
+    <div class="hint">支持沪深 A 股代码，如 600519、000858、002714</div>
+    <div id="state" class="state-msg"></div>
+  </header>
+
+  <!-- ── 分析结果 ── -->
+  <div id="out">
+    <!-- 顶栏 -->
+    <div class="topbar">
+      <div class="logo">
+        <span class="logo-text">{{ project_name }}</span>
+      </div>
+      <div class="search-mini">
+        <input id="q2" placeholder="输入股票代码" autocomplete="off">
+        <button id="go2">分析</button>
+      </div>
+    </div>
+
+    <!-- 股票信息栏 -->
+    <div class="stockbar">
+      <span class="sname" id="o-name"></span>
+      <span class="scode" id="o-code"></span>
+      <span class="smeta" id="o-meta"></span>
+    </div>
+
+    <!-- 主体：侧栏 + 内容 -->
+    <div class="main-body">
+      <!-- 左侧栏 -->
+      <nav class="sidebar">
+        <button class="tab-btn active" data-tab="t1"><span class="ico">📊</span><span>业绩检验</span></button>
+        <button class="tab-btn"        data-tab="t2"><span class="ico">🔀</span><span>业绩归因</span></button>
+        <button class="tab-btn"        data-tab="t3"><span class="ico">🛡️</span><span>验证排雷</span></button>
+        <button class="tab-btn"        data-tab="t4"><span class="ico">📐</span><span>估值区间</span></button>
+        <button class="tab-btn"        data-tab="t6"><span class="ico">📈</span><span>盈利预测</span></button>
+        <button class="tab-btn"        data-tab="t5"><span class="ico">🕯️</span><span>量价印证</span></button>
+        <div class="ver">X-C v5.2</div>
+      </nav>
+
+      <!-- 内容区 -->
+      <div class="content">
+
+    <!-- ── Tab 1：业绩检验 ── -->
+    <div class="tab-panel active" id="t1">
+      <p class="sec-label">Part A · 盈利能力</p>
+      <div class="kpi-row" id="kpi-row"></div>
+
+      <div class="charts-2col">
+        <div class="chart-wrap">
+          <div class="chart-title">营业收入 & 归母净利润（亿元）及 YoY 增速</div>
+          <div id="ch-rev-profit" style="height:260px"></div>
+          <div class="chart-note">柱：金额（左轴 亿元） ｜ 线：同比增速（右轴 %）</div>
+          <div id="growth-quality" class="chart-note" style="margin-top:8px;line-height:1.7"></div>
+        </div>
+      </div>
+
+      <div class="charts-2col">
+        <div class="chart-wrap">
+          <div class="chart-title">利润率趋势：毛利率 / 营业利润率 / 净利率 / 扣非净利率</div>
+          <div id="ch-margins" style="height:260px"></div>
+          <div class="chart-note">扣非净利率 = 剔除一次性损益；净利率 − 扣非 &gt;2pct 需关注非经常损益</div>
+        </div>
+        <div class="chart-wrap">
+          <div class="chart-title">回报率趋势：ROE / ROA / ROIC</div>
+          <div id="ch-returns" style="height:260px"></div>
+          <div class="chart-note">ROE 高而 ROIC 一般 → 回报主要靠加杠杆（详见②业绩归因）</div>
+        </div>
+      </div>
+
+      <p class="sec-label" style="margin-top:28px">Part B · 业绩自洽性</p>
+      <div class="charts-2col">
+        <div class="chart-wrap">
+          <div class="chart-title">营业收入 vs 合同负债（未来订单领先指标）</div>
+          <div id="ch-contract" style="height:240px"></div>
+          <div class="chart-note">合同负债领先营收 → 订单充裕；大幅下滑 → 未来营收承压</div>
+        </div>
+      </div>
+
+      <p class="sec-label" style="margin-top:24px">Part C · 现金流验证：利润表 vs 现金流量表</p>
+      <div class="charts-2col">
+        <div class="chart-wrap">
+          <div class="chart-title">① 收入含金量</div>
+          <div id="ch-cm1" style="height:220px"></div>
+          <div class="chart-note">健康：销售收到现金 ≥ 营业收入</div>
+        </div>
+        <div class="chart-wrap">
+          <div class="chart-title">② 成本含金量</div>
+          <div id="ch-cm2" style="height:220px"></div>
+          <div class="chart-note">购买支付现金 vs 营业成本是否同步</div>
+        </div>
+      </div>
+      <div class="charts-2col">
+        <div class="chart-wrap">
+          <div class="chart-title">③ 利润含金量</div>
+          <div id="ch-cm3" style="height:220px"></div>
+          <div class="chart-note">健康：经营现金流 ≥ 净利润</div>
+        </div>
+        <div class="chart-wrap">
+          <div class="chart-title">④ 累计净利润 vs 累计经营现金流</div>
+          <div id="ch-cum-nio" style="height:220px"></div>
+          <div class="chart-note">累计 CFO 低于累计净利润 → 利润"赚到纸上"</div>
+        </div>
+      </div>
+      <div class="charts-2col">
+        <div class="chart-wrap">
+          <div class="chart-title">⑤ 自由现金流 FCF（经营现金流 − 资本开支）</div>
+          <div id="ch-fcf" style="height:220px"></div>
+          <div class="chart-note">FCF 持续为正才是真盈利；连续为负 = 增长靠烧钱</div>
+        </div>
+        <div class="chart-wrap">
+          <div class="chart-title">⑥ 三类现金流组合（经营 / 投资 / 筹资）</div>
+          <div id="ch-cfpattern" style="height:220px"></div>
+          <div id="cfpattern-labels" class="cfpattern-strip"></div>
+          <div class="chart-note">+−− 健康成熟 ｜ +−+ 成长扩张 ｜ −−+ 靠融资 ⚠️</div>
+        </div>
+      </div>
+
+      <p class="sec-label" style="margin-top:24px">Part D · 主营业务构成（按产品）</p>
+      <div class="charts-2col">
+        <div class="chart-wrap">
+          <div class="chart-title">各业务线营业收入（亿元）</div>
+          <div id="ch-seg-rev" style="height:260px"></div>
+        </div>
+        <div class="chart-wrap">
+          <div class="chart-title">各业务线毛利率（%）</div>
+          <div id="ch-seg-gm" style="height:260px"></div>
+        </div>
+      </div>
+      <div class="charts-2col">
+        <div class="chart-wrap">
+          <div class="chart-title">各业务线营业成本（亿元）</div>
+          <div id="ch-seg-cost" style="height:240px"></div>
+        </div>
+      </div>
+
+      <p class="sec-label" style="margin-top:24px">Part E · 资产 & 负债结构</p>
+      <div class="charts-2col">
+        <div class="chart-wrap">
+          <div class="chart-title">主要资产项目构成（亿元）</div>
+          <div id="ch-asset-stack" style="height:280px"></div>
+        </div>
+        <div class="chart-wrap">
+          <div class="chart-title">主要负债项目构成（亿元）</div>
+          <div id="ch-liab-stack" style="height:280px"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Tab 2：业绩归因（四层递进） ── -->
+    <div class="tab-panel" id="t2">
+      <p class="sec-label">第一层 · ROE 杜邦分解</p>
+      <div id="dupont-contrib-card" class="contrib-card" style="display:none"></div>
+      <div class="charts-2col">
+        <div class="chart-wrap">
+          <div class="chart-title">ROE 杜邦分解趋势</div>
+          <div id="ch-dupont" style="height:260px"></div>
+          <div class="chart-note">净利率（%）与权益乘数（×）用左轴；总资产周转率（×）用右轴</div>
+        </div>
+      </div>
+      <table class="dupont-table" id="dupont-table"></table>
+
+      <p class="sec-label" style="margin-top:36px">第三层 · 利润率拆解</p>
+      <div class="charts-2col">
+        <div class="chart-wrap">
+          <div class="chart-title">利润率瀑布图（最新年报）</div>
+          <div id="ch-waterfall" style="height:280px"></div>
+          <div class="chart-note">从毛利率出发，各项费用逐层吞噬，最终剩余净利率</div>
+        </div>
+        <div class="chart-wrap">
+          <div class="chart-title">利润率趋势</div>
+          <div id="ch-margin-trend" style="height:280px"></div>
+        </div>
+      </div>
+      <div class="charts-2col">
+        <div class="chart-wrap">
+          <div class="chart-title">费用率趋势（占营业收入 %）</div>
+          <div id="ch-expense" style="height:250px"></div>
+          <div class="chart-note">费用率上升可能压缩利润空间；研发费用率上升通常是战略性投入</div>
+        </div>
+      </div>
+
+      <p class="sec-label" style="margin-top:36px">第四层 · 现金流验证</p>
+      <div id="cf-validation" style="display:none"></div>
+    </div>
+
+    <!-- ── Tab 3：验证排雷 ── -->
+    <div class="tab-panel" id="t3">
+      <div id="risk-verdict" style="display:none"></div>
+      <div id="risk-dimensions"></div>
+
+      <p class="sec-label" style="margin-top:32px">风险演变热力图 · 颜色随年份漂移看趋势</p>
+      <div class="charts-2col">
+        <div class="chart-wrap">
+          <div class="chart-title">各指标历年红黄绿状态</div>
+          <div id="ch-heatmap" style="height:380px"></div>
+          <div class="chart-note">单年绿灯不算数，看颜色漂移方向；任一指标转红需警惕</div>
+        </div>
+      </div>
+
+      <div class="chart-note" style="margin:4px 2px 24px;line-height:1.7">
+        ⚠️ <b style="color:var(--ink)">行业差异化阈值</b>：以上为制造/消费行业通用阈值，仅作初筛。
+        银行/保险（看拨备覆盖率、不良率）、房地产（存货周转&gt;1000天常态，看三道红线）、
+        证券（高杠杆常态）、周期股（底部 FCF 为负正常）需专门规则，请结合本股所属行业判断。
+        治理维度（股权质押 / 审计意见 / 监管函）需额外数据源，暂未接入。
+      </div>
+
+      <p class="sec-label">应收 & 存货增速 vs 营收增速（历史趋势）</p>
+      <div class="charts-2col">
+        <div class="chart-wrap">
+          <div class="chart-title">收入质量趋势</div>
+          <div id="ch-ar" style="height:220px"></div>
+          <div class="chart-note">应收增速持续高于营收 → 赊销冲量风险</div>
+        </div>
+        <div class="chart-wrap">
+          <div class="chart-title">库存压力趋势</div>
+          <div id="ch-inv" style="height:220px"></div>
+          <div class="chart-note">存货大幅领先营收 → 可能预示行业景气下滑</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Tab 4：估值区间 ── -->
+    <div class="tab-panel" id="t4">
+      <p class="sec-label">PE / PB 六维矩阵信号</p>
+      <div class="dashboard-grid" id="val-matrix" style="grid-template-columns:repeat(6,1fr)"></div>
+
+      <div style="display:flex;gap:14px;align-items:center;margin:6px 0 22px;
+                  font-family:var(--mono);font-size:13px;color:var(--muted)">
+        <span id="val-positive-count"></span>
+        <span style="margin-left:auto">
+          EPS TTM <b id="val-eps-ttm" style="color:var(--ink)">—</b>　·
+          Forward EPS <b id="val-eps-fwd" style="color:var(--ink)">—</b>　·
+          EPS 3年增速 <b id="val-eps-g" style="color:var(--ink)">—</b>
+        </span>
+      </div>
+
+      <div class="charts-2col">
+        <div class="chart-wrap">
+          <div class="chart-title">历史 PE-TTM 趋势（近 5 年）</div>
+          <div id="ch-pe-hist" style="height:240px"></div>
+          <div class="chart-note">橙色虚线 = 中位数 PE；蓝色虚线 = 当前 PE</div>
+        </div>
+        <div class="chart-wrap">
+          <div class="chart-title">历史 PB 趋势（近 5 年）</div>
+          <div id="ch-pb-hist" style="height:240px"></div>
+          <div class="chart-note">橙色虚线 = 中位数 PB；蓝色虚线 = 当前 PB</div>
+        </div>
+      </div>
+
+      <p class="sec-label" style="margin-top:28px">三角验证 · 目标价区间</p>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:28px"
+           id="val-targets"></div>
+
+      <p class="sec-label">三档情景分析（基于历史中位 PE × 情景 EPS）</p>
+      <table class="dupont-table" id="val-scenario-table"></table>
+      <p class="chart-note" style="margin-top:8px">
+        ⚠️ 本框架不预测目标价，所有估值以区间形式呈现，假设基于历史数据，不构成投资建议。
+      </p>
+    </div>
+
+    <!-- ── Tab 6：盈利预测 ── -->
+    <div class="tab-panel" id="t6">
+      <p class="chart-note" style="margin:0 2px 16px;line-height:1.7">
+        盈利预测只输出<b style="color:var(--ink)">区间与情景</b>，不做单点预测：用历史 CAGR + 显式假设推出三档 EPS，喂入估值模型。
+        估值不确定性 80% 来自预测假设——故所有假设均<b style="color:var(--ink)">显式列出</b>，便于复盘。
+      </p>
+
+      <p class="sec-label">关键假设 · 全部显式化（基于历史，可复盘）</p>
+      <div class="dashboard-grid" id="fc-assumptions"></div>
+
+      <p class="sec-label" style="margin-top:28px">三档情景预测 · 悲观 / 基准 / 乐观</p>
+      <table class="dupont-table" id="fc-scenario-table"></table>
+      <div class="charts-2col" style="margin-top:14px">
+        <div class="chart-wrap">
+          <div class="chart-title">三档情景：归母净利润（亿元）与 EPS（元）</div>
+          <div id="fc-scenario-chart" style="height:270px"></div>
+        </div>
+        <div class="chart-wrap">
+          <div class="chart-title">历史 + 基准预测：营收 & 归母净利润（亿元）</div>
+          <div id="fc-trajectory" style="height:270px"></div>
+          <div class="chart-note">实线=历史，虚线=基准情景外推</div>
+        </div>
+      </div>
+
+      <p class="sec-label" style="margin-top:28px">敏感性矩阵 · 营收增速 × 毛利率 → 归母净利润（亿元）</p>
+      <div class="charts-2col">
+        <div class="chart-wrap">
+          <div class="chart-title">5×5 敏感性热力图（中心为基准）</div>
+          <div id="fc-sensitivity" style="height:340px"></div>
+          <div class="chart-note">毛利率假设错 2pct 往往比营收错 10% 影响更大</div>
+        </div>
+        <div class="chart-wrap">
+          <div class="chart-title">假设冲击 → 归母净利润变化 %</div>
+          <div id="fc-shocks" style="height:340px"></div>
+        </div>
+      </div>
+
+      <div class="chart-note" style="margin:20px 2px 8px;line-height:1.7" id="fc-note"></div>
+    </div>
+
+    <!-- ── Tab 5：量价印证 ── -->
+    <div class="tab-panel" id="t5">
+      <p class="chart-note" style="margin:0 2px 16px;line-height:1.7">
+        量价只<b style="color:var(--ink)">印证</b>不<b style="color:var(--ink)">预测</b>：基本面告诉你"该不该买"，量价告诉你"市场是否同意、资金是否已在动"。
+        基本面 + 量价<b style="color:var(--ink)">共振</b>才是强信号，<b style="color:var(--ink)">背离</b>则值得深挖。
+      </p>
+
+      <p class="sec-label">基本面 × 量价 · 四象限定位</p>
+      <div id="mkt-quadrant" style="display:none"></div>
+
+      <p class="sec-label" style="margin-top:28px">基础行情 · 日 K（前复权）+ 成交量 + 均线</p>
+      <div class="chart-wrap">
+        <div class="chart-title">近 1 年 K 线 / MA5·20·60 / 成交量</div>
+        <div id="ch-kline" style="height:420px"></div>
+        <div id="mkt-turnover-note" class="chart-note">均线多头排列（MA5&gt;MA20&gt;MA60）+ 放量站上 60 日线 = 趋势走强</div>
+      </div>
+
+      <p class="sec-label" style="margin-top:28px">估值修复确认 · 估值低位 × 量能 × 趋势 三重共振</p>
+      <div id="mkt-recovery" style="display:none"></div>
+
+      <p class="sec-label" style="margin-top:28px">相对强度 · 个股 vs 大盘（上证综指，近 60 交易日）</p>
+      <div id="mkt-rs" style="display:none"></div>
+
+      <div class="chart-note" style="margin:20px 2px 8px;line-height:1.7">
+        💡 <b style="color:var(--ink)">资金流向（北向持股 / 主力净流入 / 龙虎榜 / 融资融券 / 大宗交易）</b>暂未接入：
+        这些数据依赖东方财富 push2 接口，当前本地代理环境无法访问（与历史 PE 改用新浪源同因）。
+        如在可直连环境运行，可后续补充。
+      </div>
+    </div>
+
+      </div><!-- .content -->
+    </div><!-- .main-body -->
+
+    <footer id="footer">
+      数据来自 AKShare / 新浪财经 / 东方财富公开接口，可能存在延迟或缺失，仅供学习研究，不构成投资建议。
+    </footer>
+  </div><!-- #out -->
+</div>
+
+<script>
+// ── 工具 ────────────────────────────────────────────────
+const $ = s => document.querySelector(s);
+const appEl = $('#app'), stateEl = $('#state');
+const outEl = $('#out'), heroEl = $('#hero');
+
+function setState(msg, isErr) {
+  stateEl.className = 'state-msg' + (isErr ? ' err' : '');
+  stateEl.innerHTML = msg ? (isErr ? msg : '<span class="dot"></span>' + msg) : '';
+}
+
+function fmtPeriod(d) {
+  const y = d.slice(0,4), m = d.slice(4,6);
+  if (m === '12') return y;
+  const labels = {'03':'Q1','06':'H1','09':'Q3'};
+  return y + (labels[m] || '');
+}
+
+const yi  = v => v == null ? null : v / 1e8;
+const pct = v => v == null ? null : v * 100;
+const fmt2 = v => v == null ? '—' : v.toFixed(2);
+const fmtP = v => v == null ? '—' : v.toFixed(1) + '%';
+const fmtX = v => v == null ? '—' : v.toFixed(2) + '×';
+
+const PLOTLY_CFG = {responsive:true, displayModeBar:false};
+const LAYOUT_BASE = {
+  paper_bgcolor:'transparent', plot_bgcolor:'transparent',
+  font:{family:"'IBM Plex Mono',monospace", size:12, color:'#475569'},
+  margin:{t:10, r:10, b:36, l:52},
+  legend:{orientation:'h', y:-0.18, font:{size:12, color:'#475569'}},
+  xaxis:{tickfont:{size:12, color:'#475569'}, gridcolor:'#e2e8f0'},
+  yaxis:{gridcolor:'#e2e8f0'},
+};
+
+const C = {
+  teal:'#0891b2', amber:'#d97706', blue:'#2563eb', purple:'#7c3aed',
+  red:'#dc2626', grey:'#94a3b8',
+  teal_a:'rgba(8,145,178,.35)', amber_a:'rgba(217,119,6,.35)',
+};
+
+// ── 搜索 ────────────────────────────────────────────────
+async function doSearch(inputEl) {
+  const q = (inputEl || $('#q')).value.trim();
+  outEl.style.display = 'none';
+  if (!q) return;
+  if (!/^\d{6}$/.test(q)) {
+    setState('请输入 6 位股票代码，如 600519', true);
+    return;
+  }
+  appEl.classList.add('searched');
+  analyze(q);
+}
+
+async function analyze(code) {
+  outEl.style.display = 'none';
+  setState('正在抓取财报数据，约需 15–25 秒…');
+  try {
+    const data = await (await fetch('/api/analyze?code=' + code)).json();
+    if (data.error) { setState(data.error, true); return; }
+    render(data);
+    setState('');
+  } catch(e) { setState('抓取失败，数据源可能临时不可用，请重试。', true); }
+}
+
+// ── 渲染主入口（懒渲染）────────
+let _renderCache = {};
+let _appData = null;
+
+function render(data) {
+  _appData = data;
+  _renderCache = {};
+  renderHeader(data.info);
+  renderTab('t1');
+  heroEl.style.display = 'none';
+  outEl.style.display = 'block';
+}
+
+function renderTab(tabId) {
+  if (_renderCache[tabId] || !_appData) return;
+  _renderCache[tabId] = true;
+  if (tabId === 't1') {
+    renderPerformance(_appData.performance);
+    renderSegment(_appData.segment);
+    renderAssetStack(_appData.performance);
+    renderLiabilityStack(_appData.performance);
+  }
+  if (tabId === 't2') renderAttribution(_appData.attribution);
+  if (tabId === 't3') renderRisk(_appData.risk);
+  if (tabId === 't4') renderValuation(_appData.valuation);
+  if (tabId === 't6') renderForecast(_appData.forecast);
+  if (tabId === 't5') loadMarket();
+}
+
+// ── 盈利预测 ──────────────────────────────────────────────
+function renderForecast(fc) {
+  if (!fc || !fc.scenarios || !fc.scenarios.length) {
+    $('#fc-assumptions').innerHTML =
+      '<div class="chart-note" style="grid-column:1/-1">盈利预测数据不足（历史年报不足或缺关键科目）</div>';
+    return;
+  }
+  const a = fc.assumptions || {};
+  const pp = v => v == null ? '—' : v + '%';
+
+  const cards = [
+    {t:'营收增速（基准）', v: pp(a.rev_growth_base), s:`3年CAGR ${pp(a.rev_cagr_3y)} ｜ 5年 ${pp(a.rev_cagr_5y)}`},
+    {t:'毛利率（基准）',   v: pp(a.gross_margin_base), s:'最近一年直接外推'},
+    {t:'期间费用率（基准）', v: pp(a.expense_ratio_base), s:`历史3年 ${pp(a.expense_ratio_hist3)} − 规模摊薄 ${a.scale_dampen}pct`},
+    {t:'归母净利率（锚）', v: pp(a.base_net_margin), s:'当前实际归母/营收，情景在此基础上调整'},
+    {t:'有效税率',  v: pp(a.effective_tax_rate), s:'历史3年实际税率（用于毛利率/费用率偏离的税后折算）'},
+  ];
+  $('#fc-assumptions').innerHTML = cards.map(c =>
+    `<div class="dash-card">
+       <div class="d-head"><span class="d-name">${c.t}</span></div>
+       <div class="d-val">${c.v}</div>
+       <div class="d-signal">${c.s}</div>
+     </div>`).join('');
+
+  const sc = fc.scenarios;
+  const cur = fc.current || {};
+  const head = ['情景','营收增速','营收(亿)','毛利率','费用率','归母净利润(亿)','EPS(元)','对应PE','目标价(元)'];
+  const rowOf = s => [s.name, pp(s.rev_growth), s.revenue ?? '—', pp(s.gross_margin),
+                      pp(s.expense_ratio), s.net_profit ?? '—', s.eps ?? '—',
+                      s.fwd_pe ? s.fwd_pe+'×' : '—', s.target ?? '—'];
+  const curRow = ['当前('+fmtPeriod(cur.period||'')+')','—', cur.revenue ?? '—','—','—',
+                  cur.net_profit ?? '—', cur.eps ?? '—','—','—'];
+  const thead = `<tr>${head.map(h=>`<th>${h}</th>`).join('')}</tr>`;
+  const allRows = [curRow, ...sc.map(rowOf)];
+  const tbody = allRows.map((r,ri) =>
+    `<tr${ri===0?' style="color:var(--muted)"':''}>${r.map((v,i)=>`<td ${i===0?'style="text-align:left"':''}>${v}</td>`).join('')}</tr>`
+  ).join('');
+  $('#fc-scenario-table').innerHTML = `<thead>${thead}</thead><tbody>${tbody}</tbody>`;
+
+  const names = sc.map(s=>s.name);
+  Plotly.newPlot('fc-scenario-chart', [
+    {name:'归母净利润', type:'bar', x:names, y:sc.map(s=>s.net_profit),
+      marker:{color:[C.red, C.teal, C.amber]}, yaxis:'y',
+      text: sc.map(s=>s.net_profit==null?'':s.net_profit), textposition:'outside',
+      textfont:{color:'#0f172a'}},
+    {name:'EPS', type:'scatter', mode:'lines+markers', x:names, y:sc.map(s=>s.eps),
+      line:{color:C.blue,width:2.5}, marker:{size:8}, yaxis:'y2'},
+  ], {
+    ...LAYOUT_BASE,
+    xaxis:{type:'category', tickfont:{size:13}},
+    yaxis:{title:'归母净利润(亿)', gridcolor:'#e2e8f0'},
+    yaxis2:{title:'EPS(元)', overlaying:'y', side:'right', showgrid:false},
+    margin:{t:20,r:52,b:36,l:56},
+  }, PLOTLY_CFG);
+
+  const h = fc.history || {};
+  const tj = fc.trajectory || {};
+  const histX = (h.periods||[]).map(fmtPeriod);
+  const trajX = tj.years || [];
+  const allX  = histX.concat(trajX);
+  const nH = histX.length, nT = trajX.length;
+  const pad = arr => arr.concat(Array(nT).fill(null));
+  const padFront = arr => Array(nH).fill(null).concat(arr);
+  const lastHistRev = (h.revenue||[])[nH-1], lastHistNp = (h.net_profit||[])[nH-1];
+  const trajRevLine = padFront(tj.revenue||[]); if(nH) trajRevLine[nH-1]=lastHistRev;
+  const trajNpLine  = padFront(tj.net_profit||[]); if(nH) trajNpLine[nH-1]=lastHistNp;
+  Plotly.newPlot('fc-trajectory', [
+    {name:'营收(历史)', type:'scatter', mode:'lines+markers', x:allX, y:pad(h.revenue||[]),
+      line:{color:C.teal,width:2.5}, marker:{size:5}},
+    {name:'营收(预测)', type:'scatter', mode:'lines+markers', x:allX, y:trajRevLine,
+      line:{color:C.teal,width:2,dash:'dot'}, marker:{size:5}},
+    {name:'归母净利润(历史)', type:'scatter', mode:'lines+markers', x:allX, y:pad(h.net_profit||[]),
+      line:{color:C.amber,width:2.5}, marker:{size:5}},
+    {name:'归母净利润(预测)', type:'scatter', mode:'lines+markers', x:allX, y:trajNpLine,
+      line:{color:C.amber,width:2,dash:'dot'}, marker:{size:5}},
+  ], {
+    ...LAYOUT_BASE,
+    xaxis:{type:'category', tickfont:{size:12}},
+    yaxis:{title:'亿元', gridcolor:'#e2e8f0'},
+    margin:{t:10,r:20,b:36,l:56},
+  }, PLOTLY_CFG);
+
+  const se = fc.sensitivity;
+  if (se && se.matrix && se.matrix.length) {
+    const xl = se.gross_margins.map(v=>'毛'+v+'%');
+    const yl = se.rev_growths.map(v=>'营'+v+'%');
+    Plotly.newPlot('fc-sensitivity', [{
+      type:'heatmap', x:xl, y:yl, z:se.matrix,
+      text:se.matrix.map(r=>r.map(v=>v==null?'':v)), texttemplate:'%{text}', textfont:{size:12,color:'#1e293b'},
+      colorscale:[[0,'#fecaca'],[0.5,'#fef9c3'],[1,'#bbf7d0']],
+      showscale:false, xgap:2, ygap:2,
+      hovertemplate:'营收增速 %{y}<br>毛利率 %{x}<br>归母净利润 %{z} 亿<extra></extra>',
+    }], {
+      ...LAYOUT_BASE,
+      margin:{t:10,r:10,b:40,l:70},
+      yaxis:{tickfont:{size:12}}, xaxis:{side:'top', tickfont:{size:12}},
+    }, PLOTLY_CFG);
+  }
+
+  const sh = fc.shocks || [];
+  if (sh.length) {
+    Plotly.newPlot('fc-shocks', [{
+      type:'bar', orientation:'h',
+      y: sh.map(s=>s.var), x: sh.map(s=>s.delta),
+      marker:{color: sh.map(s=>s.delta>=0?C.teal:C.red)},
+      text: sh.map(s=>(s.delta>=0?'+':'')+s.delta+'%'), textposition:'outside',
+      textfont:{color:'#0f172a'},
+    }], {
+      ...LAYOUT_BASE,
+      margin:{t:10,r:40,b:36,l:120},
+      xaxis:{title:'归母净利润变化 %', gridcolor:'#e2e8f0', zeroline:true, zerolinecolor:'#cbd5e1'},
+    }, PLOTLY_CFG);
+  }
+
+  $('#fc-note').innerHTML = '💡 ' + (fc.note || '');
+}
+
+// ── 第五段：量价印证（懒加载）──────────────────────────────
+async function loadMarket() {
+  if (!_appData) return;
+  const code = _appData.info.code;
+  const v = _appData.valuation || {};
+  const lvl = (_appData.risk && _appData.risk.verdict && _appData.risk.verdict.level) || '';
+  const qs = new URLSearchParams({
+    code,
+    pe_pct: v.pe_percentile == null ? '' : v.pe_percentile,
+    pb_pct: v.pb_percentile == null ? '' : v.pb_percentile,
+    risk:   lvl,
+  });
+  $('#ch-kline').innerHTML =
+    '<div style="padding:70px 0;text-align:center;color:var(--muted);font-size:14px">正在加载量价数据…</div>';
+  try {
+    const d = await (await fetch('/api/market?' + qs)).json();
+    renderMarket(d.market);
+  } catch (e) {
+    $('#ch-kline').innerHTML =
+      '<div style="padding:70px 0;text-align:center;color:var(--red);font-size:14px">量价数据加载失败，请重试</div>';
+  }
+}
+
+function renderMarket(m) {
+  if (!m || !m.kline || !m.kline.dates || !m.kline.dates.length) {
+    $('#ch-kline').innerHTML =
+      '<div style="padding:70px 0;text-align:center;color:var(--muted);font-size:14px">该股暂无足够量价数据</div>';
+    return;
+  }
+  $('#ch-kline').innerHTML = '';
+  const k = m.kline, UP = '#dc2626', DOWN = '#16a34a';
+  const volColors = k.close.map((c, i) =>
+    (k.open[i] != null && c != null && c >= k.open[i]) ? 'rgba(220,38,38,.4)' : 'rgba(22,163,74,.4)');
+
+  Plotly.newPlot('ch-kline', [
+    {type:'candlestick', x:k.dates, open:k.open, high:k.high, low:k.low, close:k.close,
+      name:'K线', increasing:{line:{color:UP}}, decreasing:{line:{color:DOWN}}, yaxis:'y'},
+    {type:'scatter', mode:'lines', x:k.dates, y:k.ma5,  name:'MA5',  line:{color:C.amber,width:1}, yaxis:'y'},
+    {type:'scatter', mode:'lines', x:k.dates, y:k.ma20, name:'MA20', line:{color:C.blue,width:1}, yaxis:'y'},
+    {type:'scatter', mode:'lines', x:k.dates, y:k.ma60, name:'MA60', line:{color:C.purple,width:1.5}, yaxis:'y'},
+    {type:'bar', x:k.dates, y:k.volume, name:'成交量', marker:{color:volColors}, yaxis:'y2'},
+  ], {
+    ...LAYOUT_BASE,
+    xaxis:{type:'category', rangeslider:{visible:false}, tickfont:{size:11}, nticks:9},
+    yaxis:{domain:[0.27,1], gridcolor:'#e2e8f0', title:'价(元)'},
+    yaxis2:{domain:[0,0.2], gridcolor:'#e2e8f0'},
+    margin:{t:10, r:10, b:28, l:52},
+    legend:{orientation:'h', y:-0.06, font:{size:11}},
+    showlegend:true,
+  }, PLOTLY_CFG);
+
+  const q = m.quadrant;
+  if (q && q.code) {
+    const QC = {RESONANCE_BUY:'#16a34a', BUBBLE_WARN:'#d97706', VALUE_TRAP:'#d97706', AVOID:'#dc2626'};
+    const c = QC[q.code] || 'var(--muted)';
+    const el = $('#mkt-quadrant'); el.style.display = 'block';
+    el.innerHTML = `
+      <div class="risk-verdict-card" style="border-left:5px solid ${c}">
+        <div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap">
+          <span style="font-size:13px;color:var(--muted)">四象限定位</span>
+          <span style="font-size:24px;font-weight:700;color:${c}">${q.label}</span>
+          <span class="risk-tally">基本面 ${q.fund_good ? '好 ✓' : '差 ✕'} ｜ 量价 ${q.market_positive ? '正向 ↑' : '负向 ↓'}</span>
+        </div>
+        <div style="margin-top:8px;color:var(--ink);font-size:14px">${q.desc}</div>
+      </div>`;
+  }
+
+  const rc = m.recovery;
+  if (rc) {
+    const RV = {RESONANCE_BUY:['#16a34a','估值修复启动（三重共振）'],
+                VALUE_TRAP:['#d97706','价值陷阱（低估但市场暂不认可）'],
+                NEUTRAL:['var(--muted)','信号不足，继续观察']};
+    const [rcc, rct] = RV[rc.verdict] || ['var(--muted)','—'];
+    const chk = (ok, name, detail) =>
+      `<div class="cf-check-card"><div class="cf-check-ico">${ok ? '✅' : '⬜'}</div>
+        <div class="cf-check-name">${name}</div><div class="cf-check-desc">${detail}</div></div>`;
+    const el = $('#mkt-recovery'); el.style.display = 'block';
+    el.innerHTML = `
+      <div class="risk-verdict-card" style="border-left:5px solid ${rcc};margin-bottom:12px">
+        <div style="font-size:13px;color:var(--muted);margin-bottom:4px">估值修复判定</div>
+        <div style="font-size:20px;font-weight:700;color:${rcc}">${rct}</div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
+        ${chk(rc.valuation_low, '估值低位', 'PE/PB ≤30 历史分位')}
+        ${chk(rc.volume_expand, '量能放大', '近5日均量较前期 +30%')}
+        ${chk(rc.above_ma60, '趋势确认', '站上60日线' + (rc.ma_bullish ? ' + 多头排列' : ''))}
+      </div>`;
+  }
+
+  const rs = m.rs;
+  if (rs && rs.rs != null) {
+    const c = rs.rs >= 0 ? '#16a34a' : '#dc2626';
+    const el = $('#mkt-rs'); el.style.display = 'block';
+    el.innerHTML = `
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
+        <div class="cf-check-card"><div class="cf-check-name">个股 60日涨幅</div>
+          <div class="cf-check-val">${rs.stock_ret >= 0 ? '+' : ''}${rs.stock_ret}%</div></div>
+        <div class="cf-check-card"><div class="cf-check-name">上证 60日涨幅</div>
+          <div class="cf-check-val">${rs.index_ret >= 0 ? '+' : ''}${rs.index_ret}%</div></div>
+        <div class="cf-check-card" style="border-left:3px solid ${c}"><div class="cf-check-name">相对强度 RS</div>
+          <div class="cf-check-val" style="color:${c}">${rs.rs >= 0 ? '+' : ''}${rs.rs}</div>
+          <div class="cf-check-thr">${rs.label}</div></div>
+      </div>`;
+  }
+}
+
+// ── 股票头 ──────────────────────────────────────────────
+function renderHeader(info) {
+  $('#o-name').textContent = info.name;
+  $('#o-code').textContent = info.code;
+  const price = info.price == null ? '—' : '¥' + Number(info.price).toFixed(2);
+  let meta = `现价 <b>${price}</b>`;
+  if (info.industry) meta += `　·　行业 <span class="hl">${info.industry}</span>`;
+  $('#o-meta').innerHTML = meta;
+}
+
+// ── Tab 切换 ─────────────────────────────────────────────
+document.querySelectorAll('.sidebar .tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.sidebar .tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    const tabId = btn.dataset.tab;
+    $('#' + tabId).classList.add('active');
+    renderTab(tabId);
+  });
+});
+
+// ── 第一段：业绩检验 ─────────────────────────────────────
+function renderPerformance(perf) {
+  if (!perf || !perf.periods || !perf.periods.length) return;
+
+  const xLabels = perf.periods.map(fmtPeriod);
+  const rev     = perf.revenue.map(yi);
+  const prof    = perf.net_profit.map(yi);
+  const gm      = perf.gross_margin.map(pct);
+  const nm      = perf.net_margin.map(pct);
+  const opm     = (perf.op_margin     || []).map(pct);
+  const dm      = (perf.deduct_margin || []).map(pct);
+  const roe     = perf.roe.map(pct);
+  const roa     = (perf.roa  || []).map(pct);
+  const roic    = (perf.roic || []).map(pct);
+  const ryoy    = perf.revenue_yoy.map(pct);
+  const pyoy    = perf.profit_yoy.map(pct);
+  const dyoy    = (perf.deduct_yoy || []).map(pct);
+  const hasDeduct = dm.some(v => v !== null);
+
+  const kpis = [
+    {tag:'营业收入', val: rev[0]   == null ? '—' : rev[0].toFixed(1),   unit:'亿元'},
+    {tag:'归母净利润', val: prof[0] == null ? '—' : prof[0].toFixed(1), unit:'亿元'},
+    {tag:'毛利率',  val: gm[0]     == null ? '—' : gm[0].toFixed(1),   unit:'%'},
+    {tag:'净利率',  val: nm[0]     == null ? '—' : nm[0].toFixed(1),   unit:'%'},
+    {tag:'扣非净利率', val: dm[0]  == null ? '—' : dm[0].toFixed(1),   unit:'%'},
+    {tag:'ROE',     val: roe[0]    == null ? '—' : roe[0].toFixed(1),  unit:'%'},
+    {tag:'ROIC',    val: roic[0]   == null ? '—' : roic[0].toFixed(1), unit:'%'},
+  ];
+  $('#kpi-row').innerHTML = kpis.map(k =>
+    `<div class="kpi-card">
+       <div class="ktag">${k.tag}</div>
+       <div class="kval">${k.val}<span class="kunit">${k.unit}</span></div>
+     </div>`).join('');
+
+  Plotly.newPlot('ch-rev-profit', [
+    {name:'营业收入', type:'bar', x:xLabels, y:rev,  marker:{color:C.teal_a, line:{color:C.teal,width:1.5}}, yaxis:'y'},
+    {name:'净利润',   type:'bar', x:xLabels, y:prof, marker:{color:C.amber_a,line:{color:C.amber,width:1.5}}, yaxis:'y'},
+    {name:'营收 YoY', type:'scatter', mode:'lines+markers', x:xLabels, y:ryoy,
+      line:{color:C.teal,width:2}, marker:{size:5}, yaxis:'y2'},
+    {name:'利润 YoY', type:'scatter', mode:'lines+markers', x:xLabels, y:pyoy,
+      line:{color:C.amber,width:2,dash:'dot'}, marker:{size:5}, yaxis:'y2'},
+  ], {
+    ...LAYOUT_BASE,
+    barmode:'group',
+    yaxis: {title:'亿元', gridcolor:'#e2e8f0'},
+    yaxis2:{overlaying:'y', side:'right', showgrid:false, ticksuffix:'%'},
+    margin:{t:10, r:50, b:36, l:52},
+  }, PLOTLY_CFG);
+
+  (function(){
+    const r = ryoy[0], d = hasDeduct ? dyoy[0] : null, p = pyoy[0];
+    if (r == null) { $('#growth-quality').textContent = ''; return; }
+    let msg = `最新一期营收 YoY <b style="color:var(--ink)">${r.toFixed(1)}%</b>`;
+    if (p != null) msg += ` ｜ 归母净利润 YoY <b style="color:var(--ink)">${p.toFixed(1)}%</b>`;
+    if (d != null) {
+      msg += ` ｜ 扣非净利润 YoY <b style="color:var(--ink)">${d.toFixed(1)}%</b>`;
+      if (p != null && p - d > 30) msg += '　⚠️ 归母增速远高于扣非 → 业绩或靠非经常性损益拉动';
+      else if (Math.abs(d) > 100 || Math.abs(r) > 100) msg += '　· 增速畸高，多为低基数效应，建议看绝对额与利润率趋势';
+      else if (d < r - 10) msg += '　⚠️ 扣非增速明显落后营收 → 主业盈利质量待观察';
+      else msg += '　✅ 扣非与营收增速基本匹配，增长质量健康';
+    }
+    $('#growth-quality').innerHTML = msg;
+  })();
+
+  const mTraces = [
+    {name:'毛利率',     type:'scatter', mode:'lines+markers', x:xLabels, y:gm,
+      line:{color:C.teal,  width:2.5}, marker:{size:6}},
+    {name:'营业利润率', type:'scatter', mode:'lines+markers', x:xLabels, y:opm,
+      line:{color:C.blue,  width:2}, marker:{size:5}},
+    {name:'净利率',     type:'scatter', mode:'lines+markers', x:xLabels, y:nm,
+      line:{color:C.amber, width:2.5}, marker:{size:6}},
+  ];
+  if (hasDeduct) mTraces.push(
+    {name:'扣非净利率', type:'scatter', mode:'lines+markers', x:xLabels, y:dm,
+      line:{color:C.red, width:2, dash:'dot'}, marker:{size:5}});
+  Plotly.newPlot('ch-margins', mTraces, {
+    ...LAYOUT_BASE,
+    yaxis:{title:'%', gridcolor:'#e2e8f0', ticksuffix:'%'},
+  }, PLOTLY_CFG);
+
+  Plotly.newPlot('ch-returns', [
+    {name:'ROE',  type:'scatter', mode:'lines+markers', x:xLabels, y:roe,
+      line:{color:C.teal,  width:2.5}, marker:{size:6}},
+    {name:'ROA',  type:'scatter', mode:'lines+markers', x:xLabels, y:roa,
+      line:{color:C.amber, width:2}, marker:{size:5}},
+    {name:'ROIC', type:'scatter', mode:'lines+markers', x:xLabels, y:roic,
+      line:{color:C.purple,width:2.5, dash:'dot'}, marker:{size:6}},
+  ], {
+    ...LAYOUT_BASE,
+    yaxis:{title:'%', gridcolor:'#e2e8f0', ticksuffix:'%'},
+  }, PLOTLY_CFG);
+
+  const ct = perf.contract;
+  if (ct && ct.periods && ct.periods.length && ct.contract_liab.some(v => v !== null)) {
+    const cxl = ct.periods.map(fmtPeriod);
+    Plotly.newPlot('ch-contract', [
+      {name:'营业收入', type:'bar', x:cxl, y:ct.revenue.map(yi),
+        marker:{color:C.teal_a, line:{color:C.teal,width:1.5}}, yaxis:'y'},
+      {name:'合同负债', type:'bar', x:cxl, y:ct.contract_liab.map(yi),
+        marker:{color:C.amber_a, line:{color:C.amber,width:1.5}}, yaxis:'y'},
+      {name:'合同负债 YoY', type:'scatter', mode:'lines+markers', x:cxl, y:ct.contract_yoy.map(pct),
+        line:{color:C.amber,width:2,dash:'dot'}, marker:{size:5}, yaxis:'y2'},
+    ], {
+      ...LAYOUT_BASE,
+      barmode:'group',
+      yaxis:{title:'亿元', gridcolor:'#e2e8f0'},
+      yaxis2:{overlaying:'y', side:'right', showgrid:false, ticksuffix:'%'},
+      margin:{t:10, r:50, b:36, l:52},
+    }, PLOTLY_CFG);
+  } else if (ct && ct.periods) {
+    $('#ch-contract').innerHTML = '<div style="padding:40px 0;text-align:center;color:var(--muted);font-size:14px">该公司无合同负债/预收款项（多为即时交易模式，此项不适用）</div>';
+  }
+
+  const cm = perf.cash_match;
+  if (cm && cm.periods && cm.periods.length) {
+    const xl = cm.periods.map(fmtPeriod);
+    renderCashMatch('ch-cm1', xl, cm.revenue.map(yi), cm.sales_cash.map(yi), '营业收入', '销售收到现金');
+    renderCashMatch('ch-cm2', xl, cm.cost.map(yi), cm.purchase_cash.map(yi), '营业成本', '购买支付现金');
+    renderCashMatch('ch-cm3', xl, cm.net_profit.map(yi), cm.ocf.map(yi), '净利润', '经营现金流');
+
+    if (cm.cum_profit && cm.cum_ocf) {
+      const cp = cm.cum_profit.map(yi);
+      const co = cm.cum_ocf.map(yi);
+      Plotly.newPlot('ch-cum-nio', [
+        {name:'累计净利润', type:'scatter', mode:'lines+markers', x:xl, y:cp,
+          line:{color:C.amber,width:2.5}, marker:{size:5},
+          fill:'tozeroy', fillcolor:'rgba(217,119,6,.1)'},
+        {name:'累计经营现金流', type:'scatter', mode:'lines+markers', x:xl, y:co,
+          line:{color:C.teal,width:2.5}, marker:{size:5},
+          fill:'tozeroy', fillcolor:'rgba(8,145,178,.1)'},
+      ], {
+        ...LAYOUT_BASE,
+        margin:{t:10,r:20,b:36,l:52},
+        yaxis:{title:'亿元', gridcolor:'#e2e8f0'},
+        legend:{orientation:'h', y:-0.2, font:{size:12}},
+      }, PLOTLY_CFG);
+    }
+  }
+
+  const fc = perf.fcf;
+  if (fc && fc.periods && fc.periods.length) {
+    const fxl = fc.periods.map(fmtPeriod);
+    const fv  = fc.fcf.map(yi);
+    Plotly.newPlot('ch-fcf', [
+      {name:'自由现金流', type:'bar', x:fxl, y:fv,
+        marker:{color: fv.map(v => v != null && v < 0 ? C.red : C.teal)}},
+    ], {
+      ...LAYOUT_BASE,
+      margin:{t:10,r:20,b:36,l:52},
+      yaxis:{title:'亿元', gridcolor:'#e2e8f0', zeroline:true, zerolinecolor:'#cbd5e1'},
+    }, PLOTLY_CFG);
+  }
+
+  const cfp = perf.cf_pattern;
+  if (cfp && cfp.periods && cfp.periods.length) {
+    const pxl = cfp.periods.map(fmtPeriod);
+    Plotly.newPlot('ch-cfpattern', [
+      {name:'经营', type:'bar', x:pxl, y:cfp.op_cf.map(yi),  marker:{color:C.teal}},
+      {name:'投资', type:'bar', x:pxl, y:cfp.inv_cf.map(yi), marker:{color:C.blue}},
+      {name:'筹资', type:'bar', x:pxl, y:cfp.fin_cf.map(yi), marker:{color:C.amber}},
+    ], {
+      ...LAYOUT_BASE,
+      barmode:'group',
+      yaxis:{title:'亿元', gridcolor:'#e2e8f0', zeroline:true, zerolinecolor:'#cbd5e1'},
+      legend:{orientation:'h', y:-0.2, font:{size:12}},
+    }, PLOTLY_CFG);
+
+    const RISKC = {low:'#16a34a', mid:'#d97706', high:'#dc2626', extreme:'#dc2626', grey:'var(--muted)'};
+    const sgn = s => s == null ? '·' : s > 0 ? '+' : '−';
+    $('#cfpattern-labels').innerHTML = (cfp.labels || []).slice().reverse().map(l => {
+      const c = RISKC[l.risk] || 'var(--muted)';
+      const warn = l.risk === 'extreme' ? ' ⚠️⚠️' : l.risk === 'high' ? ' ⚠️' : '';
+      return `<div class="cfp-cell">
+        <div class="cfp-year">${fmtPeriod(l.period)}</div>
+        <div class="cfp-signs">${sgn(l.signs[0])}${sgn(l.signs[1])}${sgn(l.signs[2])}</div>
+        <div class="cfp-label" style="color:${c}">${l.label}${warn}</div>
+      </div>`;
+    }).join('');
+  }
+}
+
+function renderCashMatch(divId, xl, a, b, nameA, nameB) {
+  Plotly.newPlot(divId, [
+    {name:nameA, type:'scatter', mode:'lines+markers', x:xl, y:a,
+      line:{color:C.teal,width:2.5}, marker:{size:5}},
+    {name:nameB, type:'scatter', mode:'lines+markers', x:xl, y:b,
+      line:{color:C.amber,width:2.5}, marker:{size:5}},
+  ], {
+    ...LAYOUT_BASE,
+    margin:{t:10,r:20,b:36,l:44},
+    yaxis:{title:'亿元', gridcolor:'#e2e8f0'},
+    legend:{orientation:'h', y:-0.22, font:{size:11}},
+  }, PLOTLY_CFG);
+}
+
+// ── Part C：主营业务构成 ──────────────────────────────────
+const SEG_COLORS = ['#0891b2','#d97706','#2563eb','#7c3aed','#dc2626','#64748b','#0d9488','#ca8a04'];
+
+function renderSegment(seg) {
+  if (!seg || !seg.periods || !seg.periods.length) return;
+  const years = seg.periods.slice().reverse();
+
+  const names = [];
+  const seen = new Set();
+  for (const yr of years) {
+    for (const s of (seg.by_year[yr] || [])) {
+      if (!seen.has(s.name)) { seen.add(s.name); names.push(s.name); }
+    }
+  }
+
+  const revTraces = names.map((nm, i) => ({
+    name: nm, type: 'bar', x: years,
+    y: years.map(yr => {
+      const it = (seg.by_year[yr] || []).find(s => s.name === nm);
+      return it && it.revenue != null ? +(it.revenue / 1e8).toFixed(2) : null;
+    }),
+    marker: {color: SEG_COLORS[i % SEG_COLORS.length]},
+  }));
+  Plotly.newPlot('ch-seg-rev', revTraces, {
+    ...LAYOUT_BASE, barmode: 'group',
+    yaxis: {title: '亿元', gridcolor: '#e2e8f0'},
+    legend: {orientation: 'h', y: -0.22, font: {size: 11}},
+  }, PLOTLY_CFG);
+
+  const gmTraces = names.map((nm, i) => ({
+    name: nm, type: 'scatter', mode: 'lines+markers', x: years,
+    y: years.map(yr => {
+      const it = (seg.by_year[yr] || []).find(s => s.name === nm);
+      return it && it.gross_margin != null ? +it.gross_margin.toFixed(1) : null;
+    }),
+    line: {color: SEG_COLORS[i % SEG_COLORS.length], width: 2.5},
+    marker: {size: 6},
+  }));
+  Plotly.newPlot('ch-seg-gm', gmTraces, {
+    ...LAYOUT_BASE,
+    yaxis: {title: '%', gridcolor: '#e2e8f0', ticksuffix: '%'},
+    legend: {orientation: 'h', y: -0.22, font: {size: 11}},
+  }, PLOTLY_CFG);
+
+  const costTraces = names.map((nm, i) => ({
+    name: nm, type: 'bar', x: years,
+    y: years.map(yr => {
+      const it = (seg.by_year[yr] || []).find(s => s.name === nm);
+      return it && it.cost != null ? +(it.cost / 1e8).toFixed(2) : null;
+    }),
+    marker: {color: SEG_COLORS[i % SEG_COLORS.length]},
+  }));
+  Plotly.newPlot('ch-seg-cost', costTraces, {
+    ...LAYOUT_BASE, barmode: 'group',
+    yaxis: {title: '亿元', gridcolor: '#e2e8f0'},
+    legend: {orientation: 'h', y: -0.22, font: {size: 11}},
+  }, PLOTLY_CFG);
+}
+
+// ── Part D：资产堆积面积图 ────────────────────────────────
+function renderAssetStack(perf) {
+  const as = perf && perf.asset_stack;
+  if (!as || !as.periods || !as.periods.length) return;
+  const xl = as.periods.map(fmtPeriod).reverse();
+  const items = as.items;
+  const COLORS = ['#dc2626','#65a30d','#2563eb','#9333ea','#ea580c','#0d9488','#4f46e5'];
+  const keys = Object.keys(items);
+  const traces = keys.map((name, i) => ({
+    name, type: 'scatter', mode: 'lines', x: xl,
+    y: items[name].slice().reverse().map(yi),
+    stackgroup: 'one',
+    line: {width: 0.5, color: COLORS[i % COLORS.length]},
+    fillcolor: COLORS[i % COLORS.length] + '66',
+  }));
+  Plotly.newPlot('ch-asset-stack', traces, {
+    ...LAYOUT_BASE,
+    yaxis: {title: '亿元', gridcolor: '#e2e8f0'},
+    legend: {orientation: 'h', y: -0.25, font: {size: 11}},
+    margin: {t:10, r:10, b:50, l:52},
+  }, PLOTLY_CFG);
+}
+
+// ── Part E：负债堆积面积图 ────────────────────────────────
+function renderLiabilityStack(perf) {
+  const ls = perf && perf.liability_stack;
+  if (!ls || !ls.periods || !ls.periods.length) return;
+  const xl = ls.periods.map(fmtPeriod).reverse();
+  const items = ls.items;
+  const COLORS = ['#dc2626','#ea580c','#9333ea','#2563eb','#0d9488'];
+  const keys = Object.keys(items);
+  const traces = keys.map((name, i) => ({
+    name, type: 'scatter', mode: 'lines', x: xl,
+    y: items[name].slice().reverse().map(yi),
+    stackgroup: 'one',
+    line: {width: 0.5, color: COLORS[i % COLORS.length]},
+    fillcolor: COLORS[i % COLORS.length] + '66',
+  }));
+  Plotly.newPlot('ch-liab-stack', traces, {
+    ...LAYOUT_BASE,
+    yaxis: {title: '亿元', gridcolor: '#e2e8f0'},
+    legend: {orientation: 'h', y: -0.25, font: {size: 11}},
+    margin: {t:10, r:10, b:50, l:52},
+  }, PLOTLY_CFG);
+}
+
+// ── 第二段：业绩归因 ──────────────────────────────────────
+function renderAttribution(attr) {
+  if (!attr || !attr.periods || !attr.periods.length) return;
+
+  const xl  = attr.periods.map(fmtPeriod);
+  const nm  = attr.net_margin.map(pct);
+  const at  = attr.asset_turnover;
+  const em  = attr.equity_mult;
+  const roe = attr.roe.map(pct);
+
+  const dc = attr.dupont_contrib;
+  if (dc) {
+    const sign = v => v > 0 ? '+' : '';
+    const clr  = v => v > 0 ? '#16a34a' : v < 0 ? '#dc2626' : 'var(--muted)';
+    const card = $('#dupont-contrib-card');
+    card.style.display = 'block';
+    card.innerHTML = `
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+        <span style="font-weight:500;font-size:15px;color:var(--ink)">ROE 变化</span>
+        <span style="font-size:22px;font-weight:700;color:${clr(dc.roe_change)}">${sign(dc.roe_change)}${dc.roe_change} pct</span>
+        <span style="color:var(--muted);font-size:13px">${fmtPeriod(dc.period_prev)} → ${fmtPeriod(dc.period_curr)}</span>
+      </div>
+      <div style="display:flex;gap:16px;flex-wrap:wrap">
+        <div class="contrib-item">
+          <div class="contrib-label">净利率贡献</div>
+          <div class="contrib-val" style="color:${clr(dc.nm_contrib)}">${sign(dc.nm_contrib)}${dc.nm_contrib} pct</div>
+        </div>
+        <div class="contrib-item">
+          <div class="contrib-label">周转率贡献</div>
+          <div class="contrib-val" style="color:${clr(dc.at_contrib)}">${sign(dc.at_contrib)}${dc.at_contrib} pct</div>
+        </div>
+        <div class="contrib-item">
+          <div class="contrib-label">杠杆贡献</div>
+          <div class="contrib-val" style="color:${clr(dc.em_contrib)}">${sign(dc.em_contrib)}${dc.em_contrib} pct</div>
+        </div>
+        <div class="contrib-item" style="border-left:3px solid var(--accent);padding-left:12px">
+          <div class="contrib-label">主导因子</div>
+          <div class="contrib-val" style="color:var(--accent);font-weight:700">${dc.main_driver}</div>
+        </div>
+      </div>`;
+  }
+
+  Plotly.newPlot('ch-dupont', [
+    {name:'净利率 %',   type:'scatter', mode:'lines+markers', x:xl, y:nm,
+      line:{color:C.teal, width:2.5}, marker:{size:6}, yaxis:'y'},
+    {name:'权益乘数 ×', type:'scatter', mode:'lines+markers', x:xl, y:em,
+      line:{color:C.purple,width:2.5}, marker:{size:6}, yaxis:'y'},
+    {name:'资产周转 ×', type:'scatter', mode:'lines+markers', x:xl, y:at,
+      line:{color:C.amber, width:2.5,dash:'dot'}, marker:{size:6}, yaxis:'y2'},
+    {name:'ROE %',      type:'scatter', mode:'lines+markers', x:xl, y:roe,
+      line:{color:C.red,   width:3}, marker:{size:7,symbol:'star'}, yaxis:'y'},
+  ], {
+    ...LAYOUT_BASE,
+    yaxis: {title:'% 或 ×', gridcolor:'#e2e8f0'},
+    yaxis2:{overlaying:'y', side:'right', showgrid:false},
+    margin:{t:10, r:50, b:36, l:52},
+  }, PLOTLY_CFG);
+
+  const rows = xl.map((yr, i) => [
+    yr, fmtP(nm[i]), fmtX(at[i]), fmtX(em[i]), fmtP(roe[i]),
+  ]);
+  const thead = `<tr>${['期间','净利率','总资产周转','权益乘数','ROE（验证）']
+    .map(h=>`<th>${h}</th>`).join('')}</tr>`;
+  const tbody = rows.map(r =>
+    `<tr>${r.map((v,i)=>`<td ${i===0?'style="text-align:left"':''}>${v}</td>`).join('')}</tr>`
+  ).join('');
+  $('#dupont-table').innerHTML = `<thead>${thead}</thead><tbody>${tbody}</tbody>`;
+
+  const wf = attr.waterfall;
+  if (wf && wf.items) {
+    const names  = wf.items.map(it => it.name);
+    const values = wf.items.map(it => it.value);
+    const measures = wf.items.map((it, i) =>
+      i === 0 ? 'absolute' : i === wf.items.length - 1 ? 'total' : 'relative');
+    Plotly.newPlot('ch-waterfall', [{
+      type:'waterfall', orientation:'v',
+      x: names, y: values, measure: measures,
+      connector:{line:{color:'#cbd5e1', width:1.5}},
+      increasing:{marker:{color:'#16a34a'}},
+      decreasing:{marker:{color:'#dc2626'}},
+      totals:{marker:{color:'#2563eb'}},
+      textposition:'outside',
+      text: values.map(v => (v >= 0 ? '+' : '') + v.toFixed(1) + '%'),
+      textfont:{size:12, color:'var(--ink)'},
+    }], {
+      ...LAYOUT_BASE,
+      xaxis:{type:'category', tickfont:{size:12}},
+      yaxis:{title:'%', gridcolor:'#e2e8f0', ticksuffix:'%'},
+      margin:{t:30, r:30, b:60, l:52},
+    }, PLOTLY_CFG);
+  }
+
+  const gm  = attr.gross_margin  ? attr.gross_margin.map(pct) : [];
+  const opm = attr.op_margin     ? attr.op_margin.map(pct)    : [];
+  const dm  = attr.deduct_margin ? attr.deduct_margin.map(pct): [];
+
+  if (gm.length) {
+    const mTraces = [
+      {name:'毛利率',     type:'scatter', mode:'lines+markers', x:xl, y:gm,
+        line:{color:C.teal, width:2.5}, marker:{size:5}},
+      {name:'净利率',     type:'scatter', mode:'lines+markers', x:xl, y:nm,
+        line:{color:C.amber, width:2.5}, marker:{size:5}},
+      {name:'营业利润率', type:'scatter', mode:'lines+markers', x:xl, y:opm,
+        line:{color:C.blue, width:2}, marker:{size:5}},
+    ];
+    if (dm.some(v => v !== null)) {
+      mTraces.push({name:'扣非净利率', type:'scatter', mode:'lines+markers', x:xl, y:dm,
+        line:{color:C.red, width:2, dash:'dot'}, marker:{size:5}});
+    }
+    Plotly.newPlot('ch-margin-trend', mTraces, {
+      ...LAYOUT_BASE,
+      yaxis:{title:'%', gridcolor:'#e2e8f0', ticksuffix:'%'},
+    }, PLOTLY_CFG);
+  }
+
+  const sr = attr.selling_rate.map(pct);
+  const ar = attr.admin_rate.map(pct);
+  const rdr= attr.rd_rate.map(pct);
+  const fr = attr.finance_rate.map(pct);
+
+  Plotly.newPlot('ch-expense', [
+    {name:'销售费用率', type:'scatter', mode:'lines+markers', x:xl, y:sr,
+      line:{color:C.teal,  width:2}, marker:{size:5}},
+    {name:'管理费用率', type:'scatter', mode:'lines+markers', x:xl, y:ar,
+      line:{color:C.amber, width:2}, marker:{size:5}},
+    {name:'研发费用率', type:'scatter', mode:'lines+markers', x:xl, y:rdr,
+      line:{color:C.blue,  width:2}, marker:{size:5}},
+    {name:'财务费用率', type:'scatter', mode:'lines+markers', x:xl, y:fr,
+      line:{color:C.grey,  width:2, dash:'dot'}, marker:{size:5}},
+  ], {
+    ...LAYOUT_BASE,
+    yaxis:{title:'%', gridcolor:'#e2e8f0', ticksuffix:'%'},
+  }, PLOTLY_CFG);
+
+  const cfv = attr.cf_validation;
+  if (cfv) {
+    const vEl = $('#cf-validation');
+    vEl.style.display = 'block';
+    const ico = (pass) => pass ? '✅' : '❌';
+    const verdictColor = {PASS:'#14532d', WARNING:'#78350f', FAIL:'#7f1d1d'};
+    const verdictBg    = {PASS:'#f0fdf4', WARNING:'#fffbeb', FAIL:'#fef2f2'};
+    const verdictBd    = {PASS:'#22c55e', WARNING:'#f59e0b', FAIL:'#ef4444'};
+    const verdictText  = {PASS:'通过', WARNING:'关注', FAIL:'不通过'};
+    const rq = cfv.rev_quality, pq = cfv.profit_quality, fcf = cfv.fcf;
+    const vc = verdictColor[cfv.verdict] || 'var(--muted)';
+    vEl.innerHTML = `
+      <div class="cf-verdict" style="border-left:4px solid ${verdictBd[cfv.verdict]||'var(--line)'};padding:16px 20px;background:${verdictBg[cfv.verdict]||'var(--surface)'};border-radius:10px;margin-bottom:12px">
+        <div style="font-size:13px;color:${vc};margin-bottom:4px">现金流验证结论（${fmtPeriod(cfv.period)}）</div>
+        <div style="font-size:20px;font-weight:700;color:${vc}">${verdictText[cfv.verdict] || '—'}</div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
+        <div class="cf-check-card">
+          <div class="cf-check-ico">${ico(rq !== null && rq >= 1.0)}</div>
+          <div class="cf-check-name">收入真实性</div>
+          <div class="cf-check-desc">销售现金 / 营收</div>
+          <div class="cf-check-val">${rq !== null ? rq.toFixed(2) : '—'}</div>
+          <div class="cf-check-thr">≥ 1.0 为健康</div>
+        </div>
+        <div class="cf-check-card">
+          <div class="cf-check-ico">${ico(pq !== null && pq >= 0.8)}</div>
+          <div class="cf-check-name">利润真实性</div>
+          <div class="cf-check-desc">经营现金流 / 净利润</div>
+          <div class="cf-check-val">${pq !== null ? pq.toFixed(2) : '—'}</div>
+          <div class="cf-check-thr">≥ 0.8 为健康</div>
+        </div>
+        <div class="cf-check-card">
+          <div class="cf-check-ico">${ico(fcf !== null && fcf >= 0)}</div>
+          <div class="cf-check-name">盈利可持续性</div>
+          <div class="cf-check-desc">自由现金流（FCF）</div>
+          <div class="cf-check-val">${fcf !== null ? fcf + ' 亿' : '—'}</div>
+          <div class="cf-check-thr">≥ 0 为健康</div>
+        </div>
+      </div>
+      <div class="chart-note" style="margin-top:12px">前三层归因结论必须通过现金流验证才能采信；验证不通过的结论需打折或作废</div>`;
+  }
+}
+
+// ── 第三段：验证排雷 ──────────────────────────────────────
+function renderRisk(risk) {
+  if (!risk) return;
+
+  const v = risk.verdict;
+  if (v) {
+    const vColor = {PASS:'#14532d', PREMIUM:'#14532d', WARNING:'#78350f', FAIL:'#7f1d1d'};
+    const vBg    = {PASS:'#f0fdf4', PREMIUM:'#f0fdf4', WARNING:'#fffbeb', FAIL:'#fef2f2'};
+    const vBorder= {PASS:'#22c55e', PREMIUM:'#22c55e', WARNING:'#f59e0b', FAIL:'#ef4444'};
+    const c = vColor[v.level] || 'var(--muted)';
+    const bc = vBorder[v.level] || 'var(--line)';
+    const el = $('#risk-verdict');
+    el.style.display = 'block';
+    el.innerHTML = `
+      <div class="risk-verdict-card" style="border-left:5px solid ${bc};background:${vBg[v.level]||'var(--surface)'}">
+        <div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap">
+          <span style="font-size:13px;color:${c}">排雷总判定</span>
+          <span style="font-size:26px;font-weight:700;color:${c}">${v.label}</span>
+          <span class="risk-tally" style="color:${c}">🔴 ${v.red} ｜ 🟡 ${v.yellow} ｜ 🟢 ${v.green}</span>
+        </div>
+        <div style="margin-top:8px;color:${c};font-size:14px">${v.summary}</div>
+      </div>`;
+  }
+
+  const dims = risk.dimensions || [];
+  $('#risk-dimensions').innerHTML = dims.map(dim => {
+    const cards = (dim.items || []).map(d => {
+      const valStr = d.value == null ? '—' : String(d.value);
+      return `<div class="dash-card ${d.status}">
+        <div class="d-head">
+          <span class="d-dot ${d.status}"></span>
+          <span class="d-name">${d.name}</span>
+        </div>
+        <div class="d-val">${valStr}</div>
+        <div class="d-unit">${d.unit}</div>
+        <div class="d-signal">${d.signal}</div>
+      </div>`;
+    }).join('');
+    return `<p class="sec-label" style="margin-top:20px">${dim.group}</p>
+            <div class="dashboard-grid">${cards}</div>`;
+  }).join('');
+
+  const hm = risk.heatmap;
+  if (hm && hm.rows && hm.rows.length) {
+    const SMAP = {green:3, yellow:2, red:1, grey:0};
+    const STXT = {green:'🟢', yellow:'🟡', red:'🔴', grey:'·'};
+    const xl = hm.periods.map(fmtPeriod);
+    const rowsRev = hm.rows.slice().reverse();
+    const yl = rowsRev.map(r => r.name);
+    const z  = rowsRev.map(r => r.statuses.map(s => SMAP[s] ?? 0));
+    const txt = rowsRev.map(r => r.statuses.map(s => STXT[s] || ''));
+    Plotly.newPlot('ch-heatmap', [{
+      type:'heatmap', x:xl, y:yl, z:z,
+      text:txt, texttemplate:'%{text}', textfont:{size:15},
+      xgap:3, ygap:3,
+      colorscale:[
+        [0.0, '#e2e8f0'], [0.25, '#e2e8f0'],
+        [0.25,'#fecaca'], [0.5, '#fecaca'],
+        [0.5, '#fef08a'], [0.75,'#fef08a'],
+        [0.75,'#bbf7d0'], [1.0, '#bbf7d0'],
+      ],
+      zmin:0, zmax:3, showscale:false, hoverinfo:'y+x',
+    }], {
+      ...LAYOUT_BASE,
+      margin:{t:10, r:10, b:36, l:120},
+      yaxis:{automargin:true, tickfont:{size:12}},
+      xaxis:{side:'top', tickfont:{size:12}},
+    }, PLOTLY_CFG);
+  }
+
+  const tp = (risk.trend_periods || []).map(fmtPeriod);
+  const rvy = (risk.rev_yoy  || []).map(pct);
+  const ary = (risk.ar_yoy   || []).map(pct);
+  const ivy = (risk.inv_yoy  || []).map(pct);
+
+  if (tp.length) {
+    Plotly.newPlot('ch-ar', [
+      {name:'应收账款增速', type:'bar', x:tp, y:ary,
+        marker:{color:C.amber_a, line:{color:C.amber,width:1.5}}},
+      {name:'营收增速',     type:'bar', x:tp, y:rvy,
+        marker:{color:C.teal_a,  line:{color:C.teal, width:1.5}}},
+    ], {
+      ...LAYOUT_BASE,
+      barmode:'group',
+      yaxis:{title:'%', gridcolor:'#e2e8f0', ticksuffix:'%'},
+    }, PLOTLY_CFG);
+
+    Plotly.newPlot('ch-inv', [
+      {name:'存货增速', type:'bar', x:tp, y:ivy,
+        marker:{color:C.purple + '40', line:{color:C.purple,width:1.5}}},
+      {name:'营收增速', type:'bar', x:tp, y:rvy,
+        marker:{color:C.teal_a,  line:{color:C.teal, width:1.5}}},
+    ], {
+      ...LAYOUT_BASE,
+      barmode:'group',
+      yaxis:{title:'%', gridcolor:'#e2e8f0', ticksuffix:'%'},
+    }, PLOTLY_CFG);
+  }
+}
+
+// ── 第四段：估值区间 ──────────────────────────────────────
+function renderValuation(val) {
+  if (!val || !val.matrix) return;
+
+  const sigColor = {'正面':'green','中性':'yellow','负面':'red'};
+  $('#val-matrix').innerHTML = val.matrix.map(m => {
+    const s = m.signal || 'grey';
+    const cls = sigColor[s] || 'grey';
+    return `<div class="dash-card ${cls}" style="padding:14px 12px">
+      <div class="d-head">
+        <span class="d-dot ${cls}"></span>
+        <span class="d-name" style="font-size:13px">${m.name}</span>
+      </div>
+      <div class="d-val" style="font-size:18px">${m.value}</div>
+      <div class="d-unit">${s || '—'}</div>
+    </div>`;
+  }).join('');
+
+  const total = val.matrix.length;
+  const pos = val.positive_count || 0;
+  const summary = pos >= 5 ? '强正面信号 → 进入三角验证' :
+                  pos >= 3 ? '中性 → 配合排雷模块综合判断' : '估值吸引力不足';
+  $('#val-positive-count').innerHTML =
+    `正面信号 <b style="color:var(--accent);font-size:16px">${pos} / ${total}</b>　·　${summary}`;
+
+  $('#val-eps-ttm').textContent = val.eps_ttm  != null ? val.eps_ttm  + ' 元' : '—';
+  $('#val-eps-fwd').textContent = val.eps_forward != null ? val.eps_forward + ' 元' : '—';
+  $('#val-eps-g').textContent   = val.eps_growth_3y != null ? val.eps_growth_3y + '%' : '—';
+
+  const h = val.history || {};
+  if (h.dates && h.pe && h.pe.length) {
+    const peYears  = h.dates.map(d => d.slice(0,4)+'-'+d.slice(4,6)+'-'+d.slice(6,8));
+    const med = val.pe_median;
+    const cur = val.pe_current;
+    const traces_pe = [
+      {name: 'PE-TTM', type: 'scatter', mode: 'lines',
+        x: peYears, y: h.pe.map(Number), line: {color: C.teal, width: 2}}
+    ];
+    if (med) traces_pe.push({
+      name: '中位数 '+med+'×', type:'scatter', mode:'lines',
+      x:[peYears[0], peYears[peYears.length-1]], y:[med, med],
+      line:{color:C.amber, width:2, dash:'dot'},
+    });
+    if (cur) traces_pe.push({
+      name: '当前 '+cur+'×', type:'scatter', mode:'lines',
+      x:[peYears[0], peYears[peYears.length-1]], y:[cur, cur],
+      line:{color:C.blue, width:2, dash:'dash'},
+    });
+    Plotly.newPlot('ch-pe-hist', traces_pe, {
+      ...LAYOUT_BASE,
+      xaxis: {type:'date', tickfont:{size:11}, gridcolor:'#e2e8f0'},
+      yaxis: {title:'PE-TTM', gridcolor:'#e2e8f0'},
+      legend: {orientation:'h', y:-0.2, font:{size:11}},
+    }, PLOTLY_CFG);
+  }
+
+  if (h.dates && h.pb && h.pb.length) {
+    const pbYears = h.dates.map(d => d.slice(0,4)+'-'+d.slice(4,6)+'-'+d.slice(6,8));
+    const med = val.pb_median;
+    const cur = val.pb_current;
+    const traces_pb = [
+      {name: 'PB', type: 'scatter', mode: 'lines',
+        x: pbYears, y: h.pb.map(Number), line: {color: C.purple, width: 2}}
+    ];
+    if (med) traces_pb.push({
+      name: '中位数 '+med+'×', type:'scatter', mode:'lines',
+      x:[pbYears[0], pbYears[pbYears.length-1]], y:[med, med],
+      line:{color:C.amber, width:2, dash:'dot'},
+    });
+    if (cur) traces_pb.push({
+      name: '当前 '+cur+'×', type:'scatter', mode:'lines',
+      x:[pbYears[0], pbYears[pbYears.length-1]], y:[cur, cur],
+      line:{color:C.blue, width:2, dash:'dash'},
+    });
+    Plotly.newPlot('ch-pb-hist', traces_pb, {
+      ...LAYOUT_BASE,
+      xaxis: {type:'date', tickfont:{size:11}, gridcolor:'#e2e8f0'},
+      yaxis: {title:'PB', gridcolor:'#e2e8f0'},
+      legend: {orientation:'h', y:-0.2, font:{size:11}},
+    }, PLOTLY_CFG);
+  }
+
+  const t = val.target || {};
+  const tCards = [
+    {label:'下沿（悲观）', v:t.low,  sub:'历史分位法 / PEG法 / 均值法 取最低'},
+    {label:'中位（中性）', v:t.mid,  sub:'三种方法目标价中位数'},
+    {label:'上沿（乐观）', v:t.high, sub:'历史分位法 / PEG法 / 均值法 取最高'},
+  ];
+  $('#val-targets').innerHTML = tCards.map(c => `
+    <div class="kpi-card" style="text-align:center">
+      <div class="ktag">${c.label}</div>
+      <div class="kval" style="font-size:26px">
+        ${c.v != null ? '¥'+c.v : '—'}
+      </div>
+      <div style="font-size:13px;color:var(--muted);margin-top:6px">${c.sub}</div>
+    </div>`).join('');
+
+  if (val.scenarios && val.scenarios.length) {
+    const hdrs = ['情景','假设 EPS（元）','假设 PE','目标价（元）','潜在空间'];
+    const rows = val.scenarios.map(s => {
+      const color = s.scenario==='乐观'?'#16a34a' : s.scenario==='悲观'?'#dc2626':'';
+      const upStr = s.upside != null ? s.upside+'%' : '—';
+      return `<tr>
+        <td style="text-align:left;font-weight:500;color:${color}">${s.scenario}</td>
+        <td>${s.eps != null ? s.eps : '—'}</td>
+        <td>${s.pe  != null ? s.pe+'×' : '—'}</td>
+        <td><b>${s.target_price != null ? '¥'+s.target_price : '—'}</b></td>
+        <td style="color:${s.upside>0?'#16a34a':'#dc2626'}">${upStr}</td>
+      </tr>`;
+    }).join('');
+    $('#val-scenario-table').innerHTML =
+      `<thead><tr>${hdrs.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${rows}</tbody>`;
+  }
+}
+
+// ── 事件绑定 ─────────────────────────────────────────────
+$('#go').onclick = () => doSearch($('#q'));
+$('#q').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch($('#q')); });
+$('#go2').onclick = () => doSearch($('#q2'));
+$('#q2').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch($('#q2')); });
+</script>
+</body>
+</html>
