@@ -1193,11 +1193,12 @@ def compute_forecast(raw, val=None, price=None):
     生成三档情景（悲观/基准/乐观）的营收→毛利→费用→税→归母净利润→EPS，
     并做营收增速 × 毛利率 敏感性矩阵与单变量冲击。永远输出区间，假设全部显式化。
 
-    可行性调整：一致预期（方法 B，stock_profit_forecast_em）与量价模型（方法 C，需销量/ASP）
-    所需数据源在本地代理环境不可用，本模块以方法 A + 历史假设为基础，预期差对比暂缺。
+    可行性调整：一致预期（方法 B，stock_profit_forecast_em）所需数据源在本地代理环境不可用，
+    本模块以方法 A（历史 CAGR）+ 历史假设为基础，预期差对比暂缺。
+    （方法 C 量价模型因销量/ASP/行业规模等数据三种数据源均无法提供，已从框架删除。）
 
-    会计假设：营业利润 ≈ 毛利 − 期间费用 − 税金及附加（保守略去投资收益/营业外）；
-    净利润 = 利润总额 ×(1−有效税率)；归母 = 净利润 × 归母比例。
+    净利润推导：以「当前实际归母净利率」为锚，按毛利率/费用率相对基准的偏离（税后）调整，
+    避免自下而上 营收×毛利率−费用−税 对投资收益/少数股东损益占比大的控股型公司失真。
     """
     income = raw.get("income")
     if income is None:
@@ -1408,8 +1409,9 @@ def compute_forecast(raw, val=None, price=None):
         "sensitivity": sensitivity,
         "shocks":      shocks,
         "valuation_link": {"pe_median": round(pe_median, 1) if pe_median else None, "price": price},
-        "note": "方法 B（一致预期）与方法 C（量价模型）所需数据源（stock_profit_forecast_em / 销量·ASP）"
-                "在本地代理环境不可用，预期差对比暂缺；本预测基于方法 A（历史 CAGR）+ 历史假设外推。",
+        "note": "方法 B（一致预期，stock_profit_forecast_em）在本地代理环境不可用，预期差对比暂缺；"
+                "方法 C（量价模型）因销量/ASP/行业规模数据无法获取已删除。"
+                "本预测基于方法 A（历史 CAGR）+ 历史假设、以归母净利率为锚外推。",
     }
 
 
