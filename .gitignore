@@ -219,3 +219,12 @@ __marimo__/
 
 # Claude Code 本地工具配置（dev 预览服务器等）
 .claude/
+
+# 项目数据与产出（见 CLAUDE.md：原始缓存 / 报告不上传 GitHub）
+data/
+output/
+
+# 本地临时调试脚本
+_debug*.py
+_test_*.py
+_probe*.json

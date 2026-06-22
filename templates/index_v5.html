@@ -133,6 +133,25 @@ h1{font-family:var(--display);font-weight:700;font-size:clamp(36px,7vw,48px);
 .charts-2col{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-bottom:20px}
 .charts-3col{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-bottom:20px}
 
+/* ── 行业对比 ── */
+.ind-pillars{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:14px}
+.ind-pillar{background:#faf8f5;border-radius:8px;padding:10px 14px}
+.ind-pillar .pn{font-size:12px;color:var(--muted);font-family:var(--mono)}
+.ind-pillar .pv{font-size:20px;font-weight:700;color:var(--ink);font-family:var(--mono)}
+.pbar-row{display:flex;align-items:center;gap:10px;margin-bottom:9px;font-size:13px}
+.pbar-name{width:84px;flex-shrink:0;color:var(--ink)}
+.pbar-track{flex:1;height:14px;background:#f0ece6;border-radius:7px;overflow:hidden}
+.pbar-fill{height:100%;border-radius:7px}
+.pbar-val{width:66px;text-align:right;font-family:var(--mono);color:var(--ink)}
+.pbar-pc{width:54px;text-align:right;font-family:var(--mono);color:var(--muted)}
+.pbar-tag{width:38px;text-align:center;border-radius:4px;font-size:11px;padding:2px 0;color:#1e293b}
+.sim-badge{display:inline-block;background:var(--accent-soft);color:var(--accent);border-radius:4px;
+  font-size:11px;padding:1px 6px;margin:1px 2px 1px 0;font-family:var(--mono)}
+.ind-anchor{display:inline-block;background:#fef3c7;color:#b45309;border-radius:4px;font-size:11px;padding:1px 6px;font-family:var(--mono)}
+.dupont-table tr.ind-target td{background:var(--accent-soft);font-weight:600}
+.dupont-table tr.ind-bench td{color:var(--muted);background:#faf8f5}
+@media(max-width:720px){.ind-pillars{grid-template-columns:repeat(2,1fr)}}
+
 /* ── 排雷仪表盘 ── */
 .dashboard-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-bottom:28px}
 .dash-card{background:#fff;border:none;
@@ -257,6 +276,7 @@ footer{width:100%;font-family:var(--mono);font-size:12px;
         <button class="tab-btn"        data-tab="t4"><span class="ico">📐</span><span>估值区间</span></button>
         <button class="tab-btn"        data-tab="t6"><span class="ico">📈</span><span>盈利预测</span></button>
         <button class="tab-btn"        data-tab="t5"><span class="ico">🕯️</span><span>量价印证</span></button>
+        <button class="tab-btn"        data-tab="t7"><span class="ico">🆚</span><span>行业对比</span></button>
         <div class="ver">X-C v5.2</div>
       </nav>
 
@@ -551,6 +571,16 @@ footer{width:100%;font-family:var(--mono);font-size:12px;
       </div>
     </div>
 
+    <!-- ── Tab 7：行业对比 ── -->
+    <div class="tab-panel" id="t7">
+      <p class="chart-note" style="margin:0 2px 16px;line-height:1.7">
+        行业对比回答两个问题：<b style="color:var(--ink)">「我和谁最像」</b>（A 精选同行：8 维相似度筛 Top 15 + 龙头锚定 + 双基准）与
+        <b style="color:var(--ink)">「我在行业里排第几」</b>（B 行业分位：各指标分位 + 雷达 + 分布 + 综合定位）。
+        采用<b style="color:var(--ink)">申万二级</b>行业口径；首次查询需构建行业映射，约 30–60 秒，之后命中缓存。
+      </p>
+      <div id="ind-body"></div>
+    </div>
+
       </div><!-- .content -->
     </div><!-- .main-body -->
 
@@ -653,6 +683,7 @@ function renderTab(tabId) {
   if (tabId === 't4') renderValuation(_appData.valuation);
   if (tabId === 't6') renderForecast(_appData.forecast);
   if (tabId === 't5') loadMarket();
+  if (tabId === 't7') loadIndustry();
 }
 
 // ── 盈利预测 ──────────────────────────────────────────────
@@ -876,6 +907,181 @@ function renderMarket(m) {
           <div class="cf-check-thr">${rs.label}</div></div>
       </div>`;
   }
+}
+
+// ── 第六段：行业对比（懒加载）──────────────────────────────
+async function loadIndustry() {
+  if (!_appData) return;
+  const code = _appData.info.code;
+  const body = $('#ind-body');
+  body.innerHTML =
+    '<div style="padding:80px 0;text-align:center;color:var(--muted);font-size:14px">正在构建行业对比…' +
+    '<br><span style="font-size:12px">首次查询需构建申万二级行业映射（约 30–60 秒），之后命中缓存 &lt;2 秒</span></div>';
+  try {
+    const d = await (await fetch('/api/industry?code=' + code)).json();
+    if (d.error) {
+      body.innerHTML = '<div style="padding:60px 0;text-align:center;color:var(--red);font-size:14px">' + d.error + '</div>';
+      return;
+    }
+    renderIndustry(d.industry_compare);
+  } catch (e) {
+    body.innerHTML = '<div style="padding:60px 0;text-align:center;color:var(--red);font-size:14px">行业对比加载失败，请重试</div>';
+  }
+}
+
+function renderIndustry(R) {
+  const body = $('#ind-body');
+  if (!R || !R.available) {
+    body.innerHTML =
+      '<div class="risk-verdict-card" style="border-left:4px solid var(--yellow)">' +
+      '<div style="font-size:15px;color:var(--ink)">行业对比暂不可用</div>' +
+      '<div style="color:var(--muted);margin-top:6px;font-size:13px">' + ((R && R.reason) || '未知原因') + '</div></div>';
+    return;
+  }
+  const t = R.target, ind = R.industry, A = R.section_a, B = R.section_b;
+  const nf = (v, d = 1) => v == null ? '—' : Number(v).toFixed(d);
+  const PCTC = {green:'#8FD3A6', yellow:'#F8D777', red:'#F49096', grey:'#cbd5e1'};
+  const LABC = {'绩优成长':'#16a34a','稳健盈利':'#0891b2','激进成长':'#d97706','行业落后':'#dc2626','均衡中游':'#64748b','—':'#64748b'};
+  const lc = LABC[B.composite_label] || '#64748b';
+
+  // 表格指标列
+  const NOPCT = new Set(['asset_turnover','ar_turnover','inv_turnover','current_ratio']);
+  const vfmt = (k, v) => {
+    if (v == null) return '—';
+    const d = Math.abs(v) >= 100 ? 0 : (NOPCT.has(k) ? 2 : 1);
+    return Number(v).toFixed(d) + (NOPCT.has(k) ? '' : '%');
+  };
+  const MCOLS = [
+    {k:'roe',d:1,s:'%'}, {k:'gross_margin',d:1,s:'%'}, {k:'net_margin',d:1,s:'%'},
+    {k:'rev_growth',d:1,s:'%',sign:true}, {k:'debt_ratio',d:1,s:'%'}, {k:'asset_turnover',d:2,s:''},
+  ];
+  const MHEAD = ['ROE','毛利率','净利率','营收增速','资产负债率','总资产周转'];
+  const cell = (m, c) => {
+    const v = m ? m[c.k] : null;
+    if (v == null) return '—';
+    return (c.sign && v > 0 ? '+' : '') + Number(v).toFixed(c.d) + c.s;
+  };
+
+  // ── 行业头 + 综合定位 + 四支柱 ──
+  const pill = (name, v) => `<div class="ind-pillar"><div class="pn">${name}</div>` +
+    `<div class="pv">${v == null ? '—' : v + '<span style="font-size:12px;color:var(--muted)"> 分</span>'}</div></div>`;
+  let html = `
+    <div class="risk-verdict-card" style="border-left:5px solid ${lc};margin-bottom:18px">
+      <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap">
+        <span style="font-size:13px;color:var(--muted)">申万二级</span>
+        <span style="font-size:20px;font-weight:700;color:var(--ink)">${t.industry || '—'}</span>
+        <span style="font-size:13px;color:var(--muted)">${t.parent || ''}</span>
+        <span class="risk-tally">行业 PE-TTM ${nf(ind.pe_ttm,1)} ｜ PB ${nf(ind.pb,2)} ｜ 样本 ${ind.n_pool}/${ind.n_total} 只${ind.capped ? '（按权重取前 ' + ind.n_pool + '）' : ''}</span>
+      </div>
+      <div style="display:flex;align-items:baseline;gap:12px;margin-top:10px">
+        <span style="font-size:13px;color:var(--muted)">综合定位</span>
+        <span style="font-size:26px;font-weight:700;color:${lc}">${B.composite_label}</span>
+      </div>
+      <div class="ind-pillars">
+        ${pill('盈利能力', B.pillars['盈利能力'])}${pill('成长性', B.pillars['成长性'])}
+        ${pill('运营效率', B.pillars['运营效率'])}${pill('财务健康', B.pillars['财务健康'])}
+      </div>
+    </div>`;
+
+  // ── A · 精选同行对比 ──
+  html += `<p class="sec-label">A · 精选同行对比 · 相似度筛选 Top ${A.n_top_similar} + 龙头锚定 + 双基准</p>`;
+  if (A.degrade.level !== 'ok') {
+    const DG = {warn:['#d97706','⚠️ '], alert:['#dc2626','🚩 ']};
+    const [dgc, dgi] = DG[A.degrade.level] || ['#64748b',''];
+    html += `<div class="risk-verdict-card" style="border-left:4px solid ${dgc};margin-bottom:14px">` +
+      `<span style="color:${dgc};font-weight:600">${dgi}${A.degrade.msg}</span>` +
+      `<span style="color:var(--muted);font-size:13px;margin-left:10px">最高相似度 ${A.max_count}/8</span></div>`;
+  }
+  let rows = `<tr class="ind-target">
+      <td>${t.name} <span style="color:var(--muted);font-weight:400">${t.code}</span></td>
+      <td>本公司</td><td style="text-align:left">—</td><td>${nf(t.weight,2)}%</td>
+      ${MCOLS.map(c => `<td>${cell(t.metrics, c)}</td>`).join('')}
+    </tr>`;
+  A.peers.forEach(p => {
+    const dims = (p.similar_dims || []).map(d => `<span class="sim-badge">${d}</span>`).join('') || '—';
+    const anchor = p.is_anchor ? `<span class="ind-anchor">🔒龙头</span> ` : '';
+    rows += `<tr>
+        <td>${p.name} <span style="color:var(--muted);font-weight:400">${p.code}</span></td>
+        <td><b>${p.count}</b>/8</td><td style="text-align:left">${dims}</td>
+        <td>${anchor}${nf(p.weight,2)}%</td>
+        ${MCOLS.map(c => `<td>${cell(p.metrics, c)}</td>`).join('')}
+      </tr>`;
+  });
+  const benchRow = (label, m) => `<tr class="ind-bench"><td>${label}</td><td>—</td>` +
+    `<td style="text-align:left">基准</td><td>—</td>${MCOLS.map(c => `<td>${cell(m, c)}</td>`).join('')}</tr>`;
+  rows += benchRow('▸ 精选同行中位数', A.peer_median);
+  rows += benchRow('▸ 全行业中位数', A.industry_median);
+  html += `<div style="overflow-x:auto"><table class="dupont-table">
+      <thead><tr><th>公司</th><th>相似度</th><th style="text-align:left">相似维度</th><th>权重/锚定</th>
+      ${MHEAD.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>`;
+
+  // ── B · 行业相对位置 ──
+  html += `<p class="sec-label" style="margin-top:28px">B · 行业相对位置 · 分位 + 雷达 + 分布</p>`;
+  const PORD = ['roe','roa','gross_margin','net_margin','rev_growth','profit_growth',
+                'asset_turnover','ar_turnover','inv_turnover','current_ratio','ocf_to_ni','debt_ratio'];
+  let bars = '';
+  PORD.forEach(k => {
+    const p = B.percentiles[k]; if (!p) return;
+    const w = p.percentile == null ? 0 : p.percentile;
+    const col = PCTC[p.color] || '#cbd5e1';
+    bars += `<div class="pbar-row">
+        <span class="pbar-name">${p.name}${p.reverse ? '<span style="color:var(--muted);font-size:10px"> ↓优</span>' : ''}</span>
+        <div class="pbar-track"><div class="pbar-fill" style="width:${w}%;background:${col}"></div></div>
+        <span class="pbar-val">${vfmt(k, p.value)}</span>
+        <span class="pbar-pc">${p.percentile == null ? '—' : p.percentile + '分'}</span>
+        <span class="pbar-tag" style="background:${col}">${p.label}</span>
+      </div>`;
+  });
+  html += `<div class="charts-2col">
+      <div class="chart-wrap"><div class="chart-title">多维分位雷达 · 本公司 vs 行业中位</div>
+        <div id="ind-radar" style="height:330px"></div></div>
+      <div class="chart-wrap"><div class="chart-title">各指标行业分位（0–100）</div>
+        <div style="margin-top:8px">${bars}</div>
+        <div class="chart-note">分位条越长越靠前；🟩≥60 良好/优秀 🟨40–60 中等 🟥&lt;40 偏弱/落后；「↓优」为反向指标（低更好，已反转）</div>
+      </div>
+    </div>
+    <div class="charts-2col">
+      <div class="chart-wrap"><div class="chart-title">行业 ROE 分布 · 标注本公司</div><div id="ind-hist-roe" style="height:260px"></div></div>
+      <div class="chart-wrap"><div class="chart-title">行业 净利率 分布 · 标注本公司</div><div id="ind-hist-nm" style="height:260px"></div></div>
+    </div>`;
+
+  // ── 口径 / 局限 ──
+  html += '<div class="chart-note" style="margin:18px 2px 8px;line-height:1.85">' +
+    (R.notes || []).map(n => '· ' + n).join('<br>') + '</div>';
+
+  body.innerHTML = html;
+
+  // ── 图表（容器已就绪后绘制）──
+  const rd = B.radar;
+  const close = a => a.concat([a[0]]);
+  Plotly.newPlot('ind-radar', [
+    {type:'scatterpolar', r:close(rd.target), theta:close(rd.labels), fill:'toself',
+      name:'本公司', line:{color:C.blue}, fillcolor:'rgba(37,99,235,.13)'},
+    {type:'scatterpolar', r:close(rd.median), theta:close(rd.labels),
+      name:'行业中位', line:{color:C.grey, dash:'dot'}},
+  ], {
+    ...LAYOUT_BASE,
+    polar:{radialaxis:{range:[0,100], tickfont:{size:9}, gridcolor:'#e2e8f0'},
+           angularaxis:{tickfont:{size:11}, gridcolor:'#e2e8f0'}, bgcolor:'transparent'},
+    showlegend:true, legend:{orientation:'h', y:-0.06, font:{size:11}},
+    margin:{t:24, r:34, b:30, l:34},
+  }, PLOTLY_CFG);
+
+  const indHist = (id, h) => {
+    const el = $('#' + id);
+    if (!h) { el.innerHTML = '<div style="padding:60px 0;text-align:center;color:var(--muted);font-size:13px">样本不足</div>'; return; }
+    Plotly.newPlot(id, [{type:'bar', x:h.centers, y:h.counts, marker:{color:'#A9C7EC'}, name:'行业'}], {
+      ...LAYOUT_BASE, bargap:0.06,
+      xaxis:{gridcolor:'#e2e8f0', tickfont:{size:11}}, yaxis:{title:'公司数', gridcolor:'#e2e8f0'},
+      shapes:[{type:'line', x0:h.target, x1:h.target, yref:'paper', y0:0, y1:1,
+               line:{color:'#dc2626', width:2, dash:'dash'}}],
+      annotations:[{x:h.target, yref:'paper', y:1.0, yanchor:'bottom', text:'本公司 ' + h.target,
+                    showarrow:false, font:{size:11, color:'#dc2626'}}],
+      margin:{t:20, r:10, b:30, l:44},
+    }, PLOTLY_CFG);
+  };
+  indHist('ind-hist-roe', B.distribution.roe);
+  indHist('ind-hist-nm', B.distribution.net_margin);
 }
 
 // ── 股票头 ──────────────────────────────────────────────

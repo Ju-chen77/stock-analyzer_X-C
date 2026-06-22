@@ -1755,6 +1755,25 @@ def api_market():
     return jsonify({"market": market})
 
 
+@app.route("/api/industry")
+def api_industry():
+    """行业对比层（懒加载；首次需构建申万二级反查图，约 30-60s，之后命中缓存 <2s）。"""
+    code = request.args.get("code", "").strip()
+    if not (code.isdigit() and len(code) == 6):
+        return jsonify({"error": "请提供 6 位股票代码"}), 400
+    name = code
+    hit = _CODE_NAME[_CODE_NAME["code"].astype(str) == code]
+    if not hit.empty:
+        name = str(hit.iloc[0]["name"])
+    try:
+        import industry_compare as ic
+        data = ic.industry_comparison(code, name=name)
+        return jsonify({"industry_compare": data})
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({"error": f"行业对比失败: {e}"}), 500
+
+
 @app.route("/")
 def index():
     return render_template("index_v5.html",
