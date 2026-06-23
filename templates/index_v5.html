@@ -684,6 +684,17 @@ function renderTab(tabId) {
   if (tabId === 't6') renderForecast(_appData.forecast);
   if (tabId === 't5') loadMarket();
   if (tabId === 't7') loadIndustry();
+  // 布局稳定后强制重算各图宽度：首图常在容器宽度尚未就绪时渲染，Plotly 回退到
+  // 700px 默认宽 → 溢出卡片。双 rAF 确保 display:none→block 的 reflow 完成后再 resize。
+  requestAnimationFrame(() => requestAnimationFrame(() => resizeTabPlots(tabId)));
+}
+
+function resizeTabPlots(tabId) {
+  const panel = document.getElementById(tabId);
+  if (!panel || !window.Plotly) return;
+  panel.querySelectorAll('.js-plotly-plot').forEach(el => {
+    try { Plotly.Plots.resize(el); } catch (e) {}
+  });
 }
 
 // ── 盈利预测 ──────────────────────────────────────────────

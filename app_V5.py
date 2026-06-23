@@ -72,11 +72,22 @@ _CODE_NAME = _load_code_name()
 # ═══════════════════════════════════════════════════════════════
 # 工具函数
 # ═══════════════════════════════════════════════════════════════
-def to_sina_code(code):
+def _exchange(code):
+    """
+    判定交易所前缀：SH 上证 / SZ 深证 / BJ 北证。
+    北交所代码段：43 / 83 / 87 / 88 开头，及新增 920 段（920 也以 9 开头，
+    故必须先于「6/9 → 上证」判断，否则会被误判为上证）；其余 6/9 归上证
+    （含 900 B 股），0/3 归深证。
+    """
     code = str(code).strip()
-    if code.startswith(("6", "9")): return "sh" + code
-    if code.startswith(("0", "3")): return "sz" + code
-    return "bj" + code
+    if code.startswith(("4", "8", "920")): return "BJ"
+    if code.startswith(("0", "3")):        return "SZ"
+    if code.startswith(("6", "9")):        return "SH"
+    return "BJ"
+
+def to_sina_code(code):
+    """6 位代码 → 新浪带市场前缀代码（sh / sz / bj）。"""
+    return _exchange(code).lower() + str(code).strip()
 
 def sf(x):
     """safe_float：失败或 NaN 返回 None"""
@@ -208,7 +219,7 @@ def _fetch_segment_revenue(code):
     按年份分组，每年的各产品线收入、成本、毛利率。
     """
     try:
-        prefix = "SH" if code.startswith(("6", "9")) else "SZ"
+        prefix = _exchange(code)
         url = f"https://emweb.securities.eastmoney.com/PC_HSF10/BusinessAnalysis/PageAjax?code={prefix}{code}"
         r = _req.get(url, timeout=15,
                      headers={"User-Agent": "Mozilla/5.0",
@@ -1564,7 +1575,7 @@ def _get_em_info(code):
     Returns: dict {name, industry}；失败返回 {}
     """
     try:
-        prefix = "SH" if code.startswith(("6", "9")) else "SZ"
+        prefix = _exchange(code)
         url = (f"https://emweb.securities.eastmoney.com/PC_HSF10/CompanySurvey/PageAjax"
                f"?code={prefix}{code}")
         r = _req.get(url, timeout=12,
@@ -1635,7 +1646,7 @@ def _sina_name(code):
 def _sina_suggest(keyword, limit=12):
     """
     用新浪搜索建议接口做名称/代码模糊搜索（境外服务器可访问）。
-    返回 [{code, name}]，仅保留沪深 A 股（sh/sz + 6 位代码）。
+    返回 [{code, name}]，保留沪深京 A 股（sh/sz/bj + 6 位代码）。
     """
     try:
         import requests as _req
@@ -1652,10 +1663,10 @@ def _sina_suggest(keyword, limit=12):
         if len(f) < 4:
             continue
         name, code, sina_code = f[0].strip(), f[2].strip(), f[3].strip()
-        if not (sina_code[:2] in ("sh", "sz") and code.isdigit() and len(code) == 6):
+        if not (sina_code[:2] in ("sh", "sz", "bj") and code.isdigit() and len(code) == 6):
             continue
         # field[0] 在纯代码查询时是 sina_code，此时回查名称
-        disp = name if not name.startswith(("sh", "sz")) else (_sina_name(code) or code)
+        disp = name if not name.startswith(("sh", "sz", "bj")) else (_sina_name(code) or code)
         if code in seen:
             continue
         seen.add(code)
