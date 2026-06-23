@@ -1776,9 +1776,16 @@ def api_industry():
     hit = _CODE_NAME[_CODE_NAME["code"].astype(str) == code]
     if not hit.empty:
         name = str(hit.iloc[0]["name"])
+    # 东财行业（北交所 / 申万未覆盖股用于映射到申万二级）：优先前端透传，缺失再查 F10
+    ind_str = (request.args.get("ind") or "").strip()
+    if not ind_str:
+        em = _get_em_info(code)
+        ind_str = em.get("industry") or ""
+        if name == code and em.get("name"):
+            name = em["name"]
     try:
         import industry_compare as ic
-        data = ic.industry_comparison(code, name=name)
+        data = ic.industry_comparison(code, name=name, em_industry=ind_str)
         return jsonify({"industry_compare": data})
     except Exception as e:
         import traceback; traceback.print_exc()

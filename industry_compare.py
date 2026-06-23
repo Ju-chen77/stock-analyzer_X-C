@@ -485,60 +485,201 @@ def industry_position(target_row, pool):
 
 
 # ═══════════════════════════════════════════════════════════════
+# 东财行业 → 申万二级 映射（北交所 / 申万未覆盖股的兜底）
+# ═══════════════════════════════════════════════════════════════
+# 申万 legulegu 成分不含北交所，故 BSE 股不在反查图内。用其东财行业（emweb F10
+# 可取）按关键词映射到申万二级，借该行业（沪深为主）同行做对比。关键词务求“具体”，
+# 命中越长越优先；通用 L1 词（如“电气设备”）不纳入，避免误判，未命中则声明不可用。
+EM_TO_SW = {
+    # —— 电力设备 ——
+    "电网设备":   ["输变电", "电网", "变压器", "配电", "智能电网"],
+    "电机Ⅱ":      ["电机"],
+    "电池":       ["锂电", "蓄电池", "燃料电池", "电池"],
+    "光伏设备":   ["光伏", "太阳能"],
+    "风电设备":   ["风电", "风力发电"],
+    "其他电源设备Ⅱ": ["充电桩", "储能", "电源设备"],
+    # —— 机械 ——
+    "通用设备":   ["机床", "制冷空调", "磨具", "仪器仪表", "金属制品", "通用设备"],
+    "专用设备":   ["纺织服装机械", "印刷包装机械", "农用机械", "楼宇设备", "专用设备"],
+    "工程机械":   ["工程机械"],
+    "自动化设备": ["自动化", "机器人", "工控", "工业控制"],
+    "轨交设备Ⅱ":  ["轨交", "轨道交通"],
+    # —— 电子 ——
+    "半导体":     ["半导体", "集成电路", "芯片", "分立器件"],
+    "元件":       ["被动元件", "印制电路板", "电路板", "电子元件", "覆铜板"],
+    "光学光电子": ["光学", "光电子", "面板", "LED"],
+    "消费电子":   ["消费电子"],
+    "电子化学品Ⅱ": ["电子化学品"],
+    # —— 通信 / 计算机 ——
+    "通信设备":   ["通信设备", "光通信", "光模块"],
+    "计算机设备": ["计算机设备"],
+    "软件开发":   ["应用软件", "系统软件", "软件开发"],
+    "IT服务Ⅱ":    ["IT服务", "信息技术服务"],
+    # —— 医药 ——
+    "化学制药":   ["化学制药", "原料药"],
+    "中药Ⅱ":      ["中药"],
+    "生物制品":   ["生物制品", "疫苗", "血液制品"],
+    "医疗器械":   ["医疗器械", "医疗设备"],
+    "医疗服务":   ["医疗服务"],
+    "医药商业":   ["医药商业", "医药流通"],
+    # —— 化工 ——
+    "化学制品":   ["化学制品", "涂料油墨", "民爆用品", "日用化学"],
+    "化学原料":   ["化学原料", "纯碱", "氯碱", "无机盐"],
+    "化学纤维":   ["化学纤维", "化纤", "粘胶"],
+    "农化制品":   ["农药", "化肥", "复合肥"],
+    "塑料":       ["塑料", "改性塑料"],
+    "橡胶":       ["橡胶", "轮胎"],
+    "非金属材料Ⅱ": ["碳纤维", "非金属材料"],
+    # —— 钢铁 / 有色 / 建材 ——
+    "普钢":       ["普钢", "钢铁"],
+    "特钢Ⅱ":      ["特钢", "特种钢"],
+    "工业金属":   ["工业金属", "铜", "铝", "铅锌"],
+    "小金属":     ["小金属", "稀有金属", "稀土"],
+    "能源金属":   ["锂", "钴", "镍", "能源金属"],
+    "贵金属":     ["黄金", "贵金属"],
+    "金属新材料": ["磁性材料", "合金", "金属新材料"],
+    "玻璃玻纤":   ["玻璃", "玻纤"],
+    "水泥":       ["水泥"],
+    "装修建材":   ["管材", "防水材料", "装修建材", "建筑材料"],
+    # —— 汽车 ——
+    "汽车零部件": ["汽车零部件", "汽车零件", "汽车配件"],
+    "乘用车":     ["乘用车", "整车"],
+    "商用车":     ["商用车", "客车", "货车"],
+    "摩托车及其他": ["摩托车"],
+    "汽车服务":   ["汽车服务"],
+    # —— 轻工 / 纺服 / 家电 ——
+    "包装印刷":   ["包装印刷", "包装", "印刷"],
+    "造纸":       ["造纸"],
+    "家居用品":   ["家居", "家具"],
+    "文娱用品":   ["文娱用品", "文具"],
+    "纺织制造":   ["纺织制造", "印染", "纺织"],
+    "服装家纺":   ["服装", "家纺", "鞋帽"],
+    "饰品":       ["饰品", "珠宝"],
+    "化妆品":     ["化妆品", "美妆"],
+    "小家电":     ["小家电"],
+    "白色家电":   ["白色家电", "空调", "冰箱", "洗衣机"],
+    "黑色家电":   ["黑色家电", "彩电"],
+    "厨卫电器":   ["厨卫电器", "厨房电器"],
+    "照明设备Ⅱ":  ["照明"],
+    "家电零部件Ⅱ": ["家电零部件"],
+    # —— 食品饮料 / 农业 ——
+    "食品加工":   ["食品加工", "肉制品", "速冻"],
+    "休闲食品":   ["休闲食品", "零食"],
+    "调味发酵品Ⅱ": ["调味", "发酵"],
+    "饮料乳品":   ["饮料", "乳品", "乳业"],
+    "白酒Ⅱ":      ["白酒"],
+    "非白酒":     ["啤酒", "黄酒", "葡萄酒"],
+    "养殖业":     ["养殖", "畜禽", "生猪"],
+    "种植业":     ["种植"],
+    "饲料":       ["饲料"],
+    "农产品加工": ["农产品加工", "粮油"],
+    "动物保健Ⅱ":  ["动物保健", "兽药"],
+    # —— 建筑 / 环保 / 公用 ——
+    "基础建设":   ["基础建设", "基建"],
+    "专业工程":   ["钢结构", "园林工程", "专业工程"],
+    "房屋建设Ⅱ":  ["房屋建设"],
+    "装修装饰Ⅱ":  ["装修装饰", "装饰"],
+    "环保设备Ⅱ":  ["环保设备"],
+    "环境治理":   ["污水", "固废", "大气治理", "环境治理"],
+    "电力":       ["发电", "火电", "水电", "电力"],
+    "燃气Ⅱ":      ["燃气"],
+    # —— 其他 ——
+    "专业服务":   ["检测", "认证", "专业服务"],
+    "物流":       ["物流", "快递", "仓储"],
+    "军工电子Ⅱ":  ["军工电子"],
+    "航天装备Ⅱ":  ["航天"],
+    "航空装备Ⅱ":  ["航空装备", "航空发动机"],
+}
+
+
+def _match_sw_by_em(em_industry, industries):
+    """
+    东财行业字符串 → 申万二级 (ind_code, sw_name)。
+    em_industry 形如「电气设备-输变电设备-其他输变电设备」；按 EM_TO_SW 在串中找命中，
+    命中关键词越长越具体者优先；仅返回反查图中确实存在的申万行业。无命中返回 None。
+    """
+    if not em_industry:
+        return None
+    s = str(em_industry)
+    name2code = {}
+    for ic_code, v in industries.items():
+        nm = v.get("name")
+        if nm and nm not in name2code:
+            name2code[nm] = ic_code
+    best = None   # (kw_len, sw_name)
+    for sw_name, kws in EM_TO_SW.items():
+        if sw_name not in name2code:
+            continue
+        for kw in kws:
+            if kw in s and (best is None or len(kw) > best[0]):
+                best = (len(kw), sw_name)
+    return (name2code[best[1]], best[1]) if best else None
+
+
+# ═══════════════════════════════════════════════════════════════
 # 主入口
 # ═══════════════════════════════════════════════════════════════
-def industry_comparison(code, name=None):
+def industry_comparison(code, name=None, em_industry=None):
     """
-    完整行业对比。返回：
-    {
-      available: bool, reason?: str,
-      target: {code, name, industry, ind_code, weight, metrics},
-      industry: {pe_ttm, pb, n_total, n_pool, capped},
-      section_a: {...},   # 精选同行
-      section_b: {...},   # 行业分位
-      notes: [...]        # 口径 / 局限
-    }
-    缓存：最终结果按个股 7 天（框架 L2）。
+    完整行业对比。沪深股走申万二级成分；北交所 / 申万未覆盖股用东财行业映射到申万
+    二级，与该行业（沪深为主）同行做跨分类对比（带显式声明）。
+    返回 {available, target, industry, section_a, section_b, notes}。
+    仅缓存 available=True 的结果（7 天，框架 L2）。
+
+    Args:
+        code: 6 位代码  name: 名称（可选）
+        em_industry: 东财行业字符串（北交所/未覆盖股用于映射到申万；沪深股可不传）
     """
+    code = str(code)
     cached = _cache_get(f"result_{code}", ttl_days=7)
-    if cached is not None:
+    if cached is not None and cached.get("available"):
         return cached
 
     rev = get_reverse_map()
-    info = rev["code2ind"].get(str(code))
-    if not info:
-        res = {"available": False,
-               "reason": "未在申万二级行业成分中找到该股票（可能为次新股 / 北交所 / 申万样本未覆盖）。"}
-        _cache_set(f"result_{code}", res)
-        return res
+    info = rev["code2ind"].get(code)
 
-    ind_code = info["ind_code"]
+    cross = None    # 跨分类（北交所 / 申万未覆盖）信息
+    if info:
+        ind_code = info["ind_code"]
+        target_weight = info.get("weight")
+    else:
+        matched = _match_sw_by_em(em_industry, rev["industries"]) if em_industry else None
+        if not matched:
+            if em_industry:
+                return {"available": False,
+                        "reason": f"北交所 / 次新股暂未纳入申万二级成分，且东财行业「{em_industry}」"
+                                  "未能匹配到申万行业，无法构建同行对比。"}
+            return {"available": False,
+                    "reason": "未在申万二级成分中找到该股票（北交所 / 次新 / 申万未覆盖），"
+                              "且无东财行业信息可供映射。"}
+        ind_code, sw_name = matched
+        cross = {"em_industry": em_industry, "sw_name": sw_name}
+        target_weight = None     # 不在申万成分 → 无权重（市值代理维度不可比）
+
     ind = rev["industries"].get(ind_code, {})
     members = ind.get("members", [])
 
     # 剔除 ST/*ST（框架第三节清洗），但保留目标自身
-    members_clean = [m for m in members if not _is_st(m["name"]) or m["code"] == str(code)]
+    members_clean = [m for m in members if not _is_st(m["name"]) or m["code"] == code]
 
     pool, capped = get_industry_pool(ind_code, members_clean)
     if not pool:
-        res = {"available": False, "reason": "行业成分指标抓取为空，稍后重试。"}
-        return res
+        return {"available": False, "reason": "行业成分指标抓取为空，稍后重试。"}
 
-    # 确保目标在池内（不在则单独抓取补入）
-    target_row = next((p for p in pool if p["code"] == str(code)), None)
+    # 确保目标在池内（沪深成分股本就在；北交所/未覆盖股需单独抓取补入）
+    target_row = next((p for p in pool if p["code"] == code), None)
     if target_row is None:
-        tm = get_stock_metrics(str(code))
+        tm = get_stock_metrics(code)
         if tm is None:
-            res = {"available": False, "reason": "目标股财务指标抓取失败。"}
-            return res
-        target_row = {"code": str(code), "name": name or info["ind_name"],
-                      "weight": info.get("weight"), "metrics": tm}
+            return {"available": False, "reason": "目标股财务指标抓取失败。"}
+        target_row = {"code": code, "name": name or "本公司",
+                      "weight": target_weight, "metrics": tm}
         pool = [target_row] + pool
 
     # 清洗：剔除 ROE 极端值的样本用于中位/分位（保留目标）
     def _valid(p):
         roe = p["metrics"].get("roe")
-        if p["code"] == str(code):
+        if p["code"] == code:
             return True
         return roe is None or (-50 <= roe <= 100)
     pool_clean = [p for p in pool if _valid(p)]
@@ -546,26 +687,36 @@ def industry_comparison(code, name=None):
     section_a = select_peers(target_row, pool_clean)
     section_b = industry_position(target_row, pool_clean)
 
-    notes = [
+    notes = []
+    if cross:
+        notes.append(
+            f"⚠️ 跨分类对比：本股未纳入申万二级成分（北交所 / 次新），按东财行业"
+            f"「{cross['em_industry']}」匹配到申万「{cross['sw_name']}」，同行以沪深主板为主。"
+            "北交所公司通常规模显著偏小——「市值 / 规模」维度不可比、行业分位会系统性偏低；"
+            "盈利能力 / 毛利率 / 周转等比率维度更具参考性。")
+    notes += [
         f"对比基础：申万二级「{ind.get('name','')}」行业，共 {len(members)} 只成分"
-        + (f"，按权重取前 {POOL_CAP} 只分析" if capped else f"，全部 {len(pool_clean)} 只纳入分析") + "。",
+        + (f"，按权重取前 {POOL_CAP} 只分析" if capped else f"，{len(pool_clean)} 只纳入分析") + "。",
         "数据口径：个股指标取 stock_financial_analysis_indicator 最新一期；中位数而非均值；已剔除 ST/*ST 与 ROE 极端值。",
         "维度代理（受数据源限制）：市值用申万权重代理、规模用总资产代理、成长性以近 4 期营收同比均值近似；毛利率缺失时退主营业务利润率。",
-        "申万成分与权重来自 legulegu 快照（计入日期较早），用于行业归属/龙头锚定/规模代理方向上可靠，绝对权重可能滞后。",
-        "暂未实现：5 年行业分位趋势（需逐年重抓全行业历史，开销大）；东财行情/北向/龙虎榜等 push2 接口在本地代理环境不可用。",
-        "本结果仅供学习研究，所有定位以分位/区间呈现，不构成投资建议。",
+        "申万成分与权重来自 legulegu 快照（计入日期较早），行业归属 / 龙头锚定 / 规模代理方向可靠，绝对权重可能滞后。",
+        "暂未实现：5 年行业分位趋势（需逐年重抓全行业历史，开销大）；东财行情 / 北向 / 龙虎榜等 push2 接口在本地代理环境不可用。",
+        "本结果仅供学习研究，所有定位以分位 / 区间呈现，不构成投资建议。",
     ]
 
-    target_out = {"code": str(code), "name": name or target_row["name"],
+    target_out = {"code": code, "name": name or target_row["name"],
                   "industry": ind.get("name", ""), "ind_code": ind_code,
-                  "parent": ind.get("parent", ""), "weight": target_row.get("weight"),
-                  "metrics": target_row["metrics"]}
+                  "parent": ind.get("parent", ""), "weight": target_weight,
+                  "metrics": target_row["metrics"],
+                  "cross_classified": bool(cross),
+                  "em_industry": (cross["em_industry"] if cross else None)}
 
     res = {
         "available": True,
         "target": target_out,
         "industry": {"pe_ttm": ind.get("pe_ttm"), "pb": ind.get("pb"),
-                     "n_total": len(members), "n_pool": len(pool_clean), "capped": capped},
+                     "n_total": len(members), "n_pool": len(pool_clean), "capped": capped,
+                     "cross_classified": bool(cross)},
         "section_a": section_a,
         "section_b": section_b,
         "notes": notes,

@@ -929,7 +929,8 @@ async function loadIndustry() {
     '<div style="padding:80px 0;text-align:center;color:var(--muted);font-size:14px">正在构建行业对比…' +
     '<br><span style="font-size:12px">首次查询需构建申万二级行业映射（约 30–60 秒），之后命中缓存 &lt;2 秒</span></div>';
   try {
-    const d = await (await fetch('/api/industry?code=' + code)).json();
+    const ind = (_appData.info && _appData.info.industry) || '';
+    const d = await (await fetch('/api/industry?code=' + code + '&ind=' + encodeURIComponent(ind))).json();
     if (d.error) {
       body.innerHTML = '<div style="padding:60px 0;text-align:center;color:var(--red);font-size:14px">' + d.error + '</div>';
       return;
@@ -993,6 +994,16 @@ function renderIndustry(R) {
         ${pill('运营效率', B.pillars['运营效率'])}${pill('财务健康', B.pillars['财务健康'])}
       </div>
     </div>`;
+
+  // 跨分类提示（北交所 / 申万未覆盖股）
+  if (t.cross_classified) {
+    html += `<div class="risk-verdict-card" style="border-left:4px solid var(--yellow);margin-bottom:16px">
+        <div style="color:var(--yellow);font-weight:600;margin-bottom:4px">⚠️ 跨分类对比（北交所 / 申万未覆盖）</div>
+        <div style="color:var(--muted);font-size:13px;line-height:1.65">本股未纳入申万二级成分，按东财行业
+          「${t.em_industry || '—'}」映射到申万「${t.industry}」，同行以沪深主板为主。北交所公司规模通常显著偏小，
+          <b style="color:var(--ink)">市值 / 规模维度不可比、行业分位会系统性偏低</b>；盈利能力 / 毛利率 / 周转等比率维度更具参考性。</div>
+      </div>`;
+  }
 
   // ── A · 精选同行对比 ──
   html += `<p class="sec-label">A · 精选同行对比 · 相似度筛选 Top ${A.n_top_similar} + 龙头锚定 + 双基准</p>`;
