@@ -1758,7 +1758,7 @@ def api_analyze():
             risk = compute_risk(raw)
             val  = compute_valuation(code, raw, price)
             fcst = compute_forecast(raw, val, price)
-            seg  = {}
+            seg  = (nmeta.get("segment") or {}) if nmeta else {}
 
     return jsonify({
         "info":        {"code": code, "name": name, "industry": industry, "price": price,

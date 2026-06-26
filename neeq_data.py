@@ -211,6 +211,45 @@ def parse_industry(text):
     return "-".join(names[:4])
 
 
+def parse_segment(text):
+    """
+    从年报「按产品分类分析 / 按行业分类分析」表抽取主营构成（当年本期）：
+    每行 = 名称 + 营业收入 + 营业成本 + 毛利率% (+ 若干同比%)。名称折行（如「移动空」「调」）会合并。
+    返回 [{name, revenue, cost, gross_margin}]；无「按产品/行业分类」表则 None。
+    """
+    i = text.find("按产品分类分析")
+    if i < 0:
+        i = text.find("按行业分类分析")
+    if i < 0:
+        return None
+    end = text.find("按地区分类", i + 1)
+    if end < 0:
+        end = text.find("收入构成变动", i + 1)
+    if end < 0:
+        end = i + 4000
+    lines = text[i:end].splitlines()
+    items = []
+    for idx, raw in enumerate(lines):
+        l = raw.strip()
+        nums = _NUM.findall(l)
+        if len(nums) < 3:                       # 需 营收 / 营业成本 / 毛利率 三列
+            continue
+        name = l.split(nums[0])[0].strip()
+        if not name or "合计" in name or "类别" in name:
+            continue
+        if idx + 1 < len(lines):                # 合并折行名称（纯中文短片段，如「调」「务收入」）
+            nxt = lines[idx + 1].strip()
+            if re.fullmatch(r"[一-龥]{1,5}", nxt):
+                name += nxt
+        rev = float(nums[0].replace(",", ""))
+        if not rev:
+            continue
+        items.append({"name": name, "revenue": rev,
+                      "cost": float(nums[1].replace(",", "")),
+                      "gross_margin": round(float(nums[2].replace(",", "")) / 100.0, 6)})
+    return items or None
+
+
 def parse_statements(text):
     """解析合并三表 → {periods:[本期年, 上期年(int)], income/balance/cashflow:{列名:[本期,上期]}}。"""
     bal = _locate(text, "合并资产负债表", "资产总计", end="母公司资产负债表")
@@ -266,10 +305,14 @@ def build_raw(code, name=None, n_reports=3, ttl_days=30):
         merged = {"income": {}, "balance": {}, "cashflow": {}}
         used = []
         industry = ""
+        seg_by_year = {}
         for idx, (year, art) in enumerate(reports[:n_reports]):
             text, m = fetch_report_text(art)
             if idx == 0:
                 industry = parse_industry(text)        # 取最新一份年报的行业
+            sitems = parse_segment(text)               # 各年「按产品分类」主营构成
+            if sitems:
+                seg_by_year[str(year)] = sitems
             r = parse_statements(text)
             ps = r.get("periods") or [year, year - 1]
             if not name and m.get("name"):
@@ -288,6 +331,8 @@ def build_raw(code, name=None, n_reports=3, ttl_days=30):
         for s in merged:
             all_years |= set(merged[s].keys())
         meta = {"name": name, "market": "NEEQ", "annual_only": True, "industry": industry,
+                "segment": ({"by_year": seg_by_year, "periods": sorted(seg_by_year.keys(), reverse=True)}
+                            if seg_by_year else {}),
                 "reports": used, "periods": sorted(all_years, reverse=True)}
         try:
             json.dump({"merged": merged, "meta": meta}, open(cache, "w", encoding="utf-8"),
