@@ -557,7 +557,7 @@ EM_TO_SW = {
     "饰品":       ["饰品", "珠宝"],
     "化妆品":     ["化妆品", "美妆"],
     "小家电":     ["小家电"],
-    "白色家电":   ["白色家电", "空调", "冰箱", "洗衣机"],
+    "白色家电":   ["白色家电", "空调", "冰箱", "洗衣机", "空气调节器", "家用电力器具", "除湿机", "热泵"],
     "黑色家电":   ["黑色家电", "彩电"],
     "厨卫电器":   ["厨卫电器", "厨房电器"],
     "照明设备Ⅱ":  ["照明"],
@@ -670,6 +670,12 @@ def industry_comparison(code, name=None, em_industry=None):
     target_row = next((p for p in pool if p["code"] == code), None)
     if target_row is None:
         tm = get_stock_metrics(code)
+        if tm is None and cross:        # 新三板 / 申万未覆盖：用年报解析的财务算指标
+            try:
+                import neeq_data as _nq
+                tm = _nq.neeq_metrics(code)
+            except Exception:
+                tm = None
         if tm is None:
             return {"available": False, "reason": "目标股财务指标抓取失败。"}
         target_row = {"code": code, "name": name or "本公司",
@@ -690,10 +696,10 @@ def industry_comparison(code, name=None, em_industry=None):
     notes = []
     if cross:
         notes.append(
-            f"⚠️ 跨分类对比：本股未纳入申万二级成分（北交所 / 次新），按东财行业"
+            f"⚠️ 跨分类对比：本股未纳入申万二级成分（新三板 / 北交所 / 次新），按所属行业"
             f"「{cross['em_industry']}」匹配到申万「{cross['sw_name']}」，同行以沪深主板为主。"
-            "北交所公司通常规模显著偏小——「市值 / 规模」维度不可比、行业分位会系统性偏低；"
-            "盈利能力 / 毛利率 / 周转等比率维度更具参考性。")
+            "此类公司通常规模显著偏小——「市值 / 规模」维度不可比；新三板取年报年度数，"
+            "与沪深同行最新一期（可能为季度）口径不一致，盈利 / 比率分位可能系统性偏高，仅供方向性参考。")
     notes += [
         f"对比基础：申万二级「{ind.get('name','')}」行业，共 {len(members)} 只成分"
         + (f"，按权重取前 {POOL_CAP} 只分析" if capped else f"，{len(pool_clean)} 只纳入分析") + "。",

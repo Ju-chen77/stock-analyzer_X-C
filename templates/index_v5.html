@@ -603,9 +603,9 @@ function setState(msg, isErr) {
 
 function fmtPeriod(d) {
   const y = d.slice(0,4), m = d.slice(4,6);
-  if (m === '12') return y;
-  const labels = {'03':'Q1','06':'H1','09':'Q3'};
-  return y + (labels[m] || '');
+  if (m === '12') return y;                       // 年报 → 2023
+  const labels = {'03':'1Q', '06':'1H', '09':'3Q'};   // 半年报 → 1H2023；季报 → 1Q/3Q2023
+  return (labels[m] || '') + y;
 }
 
 const yi  = v => v == null ? null : v / 1e8;
@@ -1113,6 +1113,8 @@ function renderHeader(info) {
   const price = info.price == null ? '—' : '¥' + Number(info.price).toFixed(2);
   let meta = `现价 <b>${price}</b>`;
   if (info.industry) meta += `　·　行业 <span class="hl">${info.industry}</span>`;
+  if (info.market === 'NEEQ')
+    meta += `　·　<span style="background:#fef3c7;color:#b45309;border-radius:4px;padding:1px 8px;font-size:12px;font-family:var(--mono)">新三板 · 仅年报数据（无季度 / 现价 / 估值 / 量价）</span>`;
   $('#o-meta').innerHTML = meta;
 }
 

@@ -1736,8 +1736,33 @@ def api_analyze():
     fcst  = compute_forecast(raw, val, price)
     seg   = _fetch_segment_revenue(code)
 
+    # 新三板（NEEQ）兜底：沪深京数据源取不到（perf 为空）且为北证段代码（4/8/920）
+    # → 走「年报公告文本解析」流水线（neeq_data），重算基本面。仅年报、无季度、无行情。
+    market = ""
+    if _exchange(code) == "BJ" and not (perf and perf.get("periods")):
+        try:
+            import neeq_data as nq
+            nraw, nmeta = nq.build_raw(code)
+        except Exception as e:
+            import traceback; traceback.print_exc()
+            nraw, nmeta = None, None
+        if nraw:
+            market = "NEEQ"
+            raw, price = nraw, None            # 新三板无 push2 行情 → 现价/估值/量价不可用
+            if nmeta and nmeta.get("name"):
+                name = nmeta["name"]
+            if nmeta and nmeta.get("industry"):
+                industry = nmeta["industry"]   # 年报抽取的行业（CSRC 口径）→ 行业对比跨分类检索
+            perf = compute_performance(raw, code)
+            attr = compute_attribution(raw)
+            risk = compute_risk(raw)
+            val  = compute_valuation(code, raw, price)
+            fcst = compute_forecast(raw, val, price)
+            seg  = {}
+
     return jsonify({
-        "info":        {"code": code, "name": name, "industry": industry, "price": price},
+        "info":        {"code": code, "name": name, "industry": industry, "price": price,
+                        "market": market, "annual_only": market == "NEEQ"},
         "performance": perf,
         "attribution": attr,
         "risk":        risk,
