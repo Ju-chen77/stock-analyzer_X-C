@@ -4,6 +4,33 @@
 
 ---
 
+## [app_V5.10] — 2026-07-01
+
+### 新增 · Wind 第一通道（估值 + 名称/行业，双通道回退）
+
+把 Wind（万得 AI 金融数据）接为**首选**数据源，用于升级估值与标的识别的精确性；调用失败、
+超时或**每日额度用尽**时**自动回退**到原有 akshare / 新浪 / 东财 / 年报解析通道（用户既定：
+Wind 一通道，原通道二通道）。三大报表暂不走 Wind（省额度）。
+
+- **`wind_data.py`（新增）**：直连 Wind MCP HTTPS 端点（`mcp.wind.com.cn/vserver_stock_data/mcp/`，
+  JSON-RPC 2.0），**不经** skill 的 node CLI——该 CLI 在本机（用户目录含非 ASCII「小可爱」）经
+  Python subprocess 派生时 stdout 恒为空，故直接复刻其 HTTP 逻辑
+  - `market_indicators()`：现价 / 总市值(总市值2) / PE(TTM) / **PB(市净率LF)**（此前误用「市净率」返回 0）
+  - `basic_info()`：证券简称 + 申万行业全链（如「食品饮料--白酒Ⅱ--白酒Ⅲ」）
+  - 额度/限流：报错即熔断（`_QUOTA_EXHAUSTED`）本进程后续短路回退；行情缓存 12h、名称/行业 30d
+  - 密钥运行时从 `~/.wind-aifinmarket/config` 读取，仅驻内存，不硬编码 / 不日志 / 不入库
+- **`app_V5.py`**：`api_analyze` Wind 优先取 名称 / 申万行业 / 现价（回退本地表→新浪→东财）；
+  `_inject_wind_multiples()` 用 Wind 权威 PE(TTM)/PB/市值覆盖估值当前倍数（历史 PE 序列缺失/滞后时尤关键）；
+  `info` 增 `mktcap`(亿元) 与 `wind` 标记；模块级 `import wind_data` 加保护，任何 Wind 异常都不影响主流程
+- **`industry_compare.py`**：`industry_comparison` 增 `sw_l2` 参；`_match_sw_by_name()` 用 Wind 申万二级名
+  **直连**反查图（精确 + 罗马数字后缀兜底，如白酒↔白酒Ⅱ），优先于东财关键词跨分类——北交所同行池更准；
+  `/api/industry` 命中 analyze 阶段缓存取 `sw_l2`（不额外耗额度）
+- **前端**：头部加「总市值」与「Wind 实时」蓝标（`info.wind`）
+- **实测**：600519 贵州茅台 现价 ¥1191 / 市值 1.49 万亿 / PE 18.0 / **PB 6.39** / 申万白酒Ⅱ（全部 Wind）；
+  874628 欧伦电气（新三板）Wind 无行情/申万 → 正常回退年报通道（名称、行业、3 年年报、Part D 主营构成不变）
+
+---
+
 ## [app_V5.9] — 2026-06-26
 
 ### 新增

@@ -30,6 +30,13 @@ import requests as _req
 import pandas as pd
 from flask import Flask, request, jsonify, render_template
 
+# Wind 第一通道（估值 + 名称/行业）；导入失败即禁用，全程回退原通道，绝不影响主流程
+try:
+    import wind_data as wind
+except Exception as _wind_err:
+    wind = None
+    print(f"[Wind] 模块加载失败，禁用 Wind 通道: {_wind_err}")
+
 PROJECT_NAME = "财报透析"
 PROJECT_DESC = "业绩检验 · 业绩归因 · 验证排雷"
 
@@ -1195,6 +1202,29 @@ def compute_valuation(code, raw, price):
     }
 
 
+def _inject_wind_multiples(val, wmkt):
+    """
+    用 Wind 权威 PE(TTM) / PB(LF) / 总市值 覆盖估值当前倍数。
+
+    compute_valuation 的当前 PE/PB 来自 _get_pe_history 历史序列末值——该序列在部分标的
+    （新股 / 被墙接口）缺失或滞后。Wind 提供的是权威实时口径，故一旦可得就覆盖显示值。
+    仅当 compute_valuation 已产出**非空**估值时注入，避免拼出半成品估值。就地修改 val。
+
+    Args:
+        val:  compute_valuation 的返回（dict，可能为空 {}）
+        wmkt: wind_data.market_indicators 的返回（dict 或 None）
+    """
+    if not isinstance(val, dict) or not val or not wmkt:
+        return
+    if wmkt.get("pe_ttm") is not None:
+        val["pe_current"] = round(wmkt["pe_ttm"], 1)
+    if wmkt.get("pb") is not None:
+        val["pb_current"] = round(wmkt["pb"], 2)
+    if wmkt.get("mktcap") is not None:
+        val["mktcap"] = round(wmkt["mktcap"] / 1e8, 1)   # 元 → 亿元
+    val["wind"] = True                                   # 标记：当前倍数来自 Wind
+
+
 # ═══════════════════════════════════════════════════════════════
 # 盈利预测（业绩检验/归因之后、PE-PB 估值之前的前置环节）
 # ═══════════════════════════════════════════════════════════════
@@ -1710,29 +1740,51 @@ def api_analyze():
     if not (code.isdigit() and len(code) == 6):
         return jsonify({"error": "请提供 6 位股票代码"}), 400
 
-    name, industry = code, ""
-    hit = _CODE_NAME[_CODE_NAME["code"].astype(str) == code]
-    if not hit.empty:
-        name = str(hit.iloc[0]["name"])
+    # ── Wind 第一通道：名称 / 申万行业 / 现价 / 估值倍数；失败或额度用尽自动回退原通道 ──
+    #    Wind 覆盖沪深京(.SH/.SZ/.BJ)：证券简称 + 申万行业全链 + 现价/总市值/PE(TTM)/PB(LF)。
+    #    新三板(.NQ) Wind 不返回行情/申万 → 名称仍可得，其余走下方 NEEQ 年报兜底。
+    wmkt = wbasic = None
+    if wind is not None:
+        try:
+            wmkt = wind.market_indicators(code)
+        except Exception:
+            wmkt = None
+        try:
+            wbasic = wind.basic_info(code)
+        except Exception:
+            wbasic = None
 
-    # 名称：优先新浪行情接口（境外可达），失败再退东财
+    name, industry = code, ""
+    if wbasic and wbasic.get("name"):
+        name = wbasic["name"]
+    elif wmkt and wmkt.get("name"):
+        name = wmkt["name"]
+    if wbasic and wbasic.get("sw_full"):
+        industry = wbasic["sw_full"].replace("--", " · ")     # 申万全链（权威），显示用
+
+    # 名称/行业兜底：本地代码表 → 新浪行情 → 东财 F10
+    if name == code:
+        hit = _CODE_NAME[_CODE_NAME["code"].astype(str) == code]
+        if not hit.empty:
+            name = str(hit.iloc[0]["name"])
     if name == code:
         name = _sina_name(code) or code
+    if not industry or name == code:
+        em = _get_em_info(code)
+        if not industry and em.get("industry"):
+            industry = em["industry"]
+        if name == code and em.get("name"):
+            name = em["name"]
 
-    # 行业 & 名称兜底：东财 push2 行情接口（替代有 pandas bug 的 stock_individual_info_em）
-    em = _get_em_info(code)
-    if em.get("industry"):
-        industry = em["industry"]
-    if name == code and em.get("name"):
-        name = em["name"]
-
-    price = fetch_price(code)
+    # 现价：Wind → 新浪行情
+    price = (wmkt.get("price") if wmkt else None) or fetch_price(code)
     raw   = fetch_raw(code)
 
     perf  = compute_performance(raw, code)
     attr  = compute_attribution(raw)
     risk  = compute_risk(raw)
     val   = compute_valuation(code, raw, price)
+    _inject_wind_multiples(val, wmkt)         # Wind 权威 PE(TTM)/PB/市值 覆盖当前倍数
     fcst  = compute_forecast(raw, val, price)
     seg   = _fetch_segment_revenue(code)
 
@@ -1760,9 +1812,12 @@ def api_analyze():
             fcst = compute_forecast(raw, val, price)
             seg  = (nmeta.get("segment") or {}) if nmeta else {}
 
+    # 总市值（Wind 提供，元 → 亿元）；NEEQ 无 Wind 行情 → 不展示
+    mktcap_yi = round(wmkt["mktcap"] / 1e8, 1) if (wmkt and wmkt.get("mktcap")) else None
     return jsonify({
         "info":        {"code": code, "name": name, "industry": industry, "price": price,
-                        "market": market, "annual_only": market == "NEEQ"},
+                        "market": market, "annual_only": market == "NEEQ",
+                        "mktcap": mktcap_yi, "wind": bool(wmkt)},
         "performance": perf,
         "attribution": attr,
         "risk":        risk,
@@ -1801,6 +1856,17 @@ def api_industry():
     hit = _CODE_NAME[_CODE_NAME["code"].astype(str) == code]
     if not hit.empty:
         name = str(hit.iloc[0]["name"])
+    # Wind 申万二级名（沪深京可得）→ 直连反查图，优先于东财行业关键词跨分类
+    sw_l2 = None
+    if wind is not None:
+        try:
+            wb = wind.basic_info(code)   # 命中 analyze 阶段缓存，不额外耗额度
+            if wb:
+                sw_l2 = wb.get("sw_l2")
+                if name == code and wb.get("name"):
+                    name = wb["name"]
+        except Exception:
+            sw_l2 = None
     # 东财行业（北交所 / 申万未覆盖股用于映射到申万二级）：优先前端透传，缺失再查 F10
     ind_str = (request.args.get("ind") or "").strip()
     if not ind_str:
@@ -1810,7 +1876,7 @@ def api_industry():
             name = em["name"]
     try:
         import industry_compare as ic
-        data = ic.industry_comparison(code, name=name, em_industry=ind_str)
+        data = ic.industry_comparison(code, name=name, em_industry=ind_str, sw_l2=sw_l2)
         return jsonify({"industry_compare": data})
     except Exception as e:
         import traceback; traceback.print_exc()

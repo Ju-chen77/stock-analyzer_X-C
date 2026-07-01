@@ -1112,7 +1112,14 @@ function renderHeader(info) {
   $('#o-code').textContent = info.code;
   const price = info.price == null ? '—' : '¥' + Number(info.price).toFixed(2);
   let meta = `现价 <b>${price}</b>`;
+  if (info.mktcap != null) {
+    const mc = info.mktcap >= 10000 ? (info.mktcap / 10000).toFixed(2) + ' 万亿'
+                                    : info.mktcap.toLocaleString() + ' 亿';
+    meta += `　·　总市值 <b>${mc}</b>`;
+  }
   if (info.industry) meta += `　·　行业 <span class="hl">${info.industry}</span>`;
+  if (info.wind)
+    meta += `　·　<span style="background:#e0f2fe;color:#0369a1;border-radius:4px;padding:1px 8px;font-size:12px;font-family:var(--mono)">Wind 实时</span>`;
   if (info.market === 'NEEQ')
     meta += `　·　<span style="background:#fef3c7;color:#b45309;border-radius:4px;padding:1px 8px;font-size:12px;font-family:var(--mono)">新三板 · 仅年报数据（无季度 / 现价 / 估值 / 量价）</span>`;
   $('#o-meta').innerHTML = meta;

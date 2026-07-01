@@ -29,6 +29,7 @@
 """
 
 import os
+import re
 import json
 import time
 import math
@@ -616,10 +617,33 @@ def _match_sw_by_em(em_industry, industries):
     return (name2code[best[1]], best[1]) if best else None
 
 
+def _match_sw_by_name(sw_name, industries):
+    """
+    Wind 申万二级名 → (ind_code, sw_name)。直连反查图，最权威（无需东财关键词猜测）。
+
+    先精确匹配；不中则去掉罗马数字后缀（白酒Ⅱ ↔ 白酒）再匹配一次。无命中返回 None。
+    """
+    if not sw_name:
+        return None
+    target = str(sw_name).strip()
+    name2code = {}
+    for ic_code, v in industries.items():
+        nm = v.get("name")
+        if nm and nm not in name2code:
+            name2code[nm] = ic_code
+    if target in name2code:
+        return name2code[target], target
+    base = re.sub(r"[ⅠⅡⅢⅣⅤⅥ]+$", "", target)
+    for nm, ic in name2code.items():
+        if re.sub(r"[ⅠⅡⅢⅣⅤⅥ]+$", "", nm) == base:
+            return ic, nm
+    return None
+
+
 # ═══════════════════════════════════════════════════════════════
 # 主入口
 # ═══════════════════════════════════════════════════════════════
-def industry_comparison(code, name=None, em_industry=None):
+def industry_comparison(code, name=None, em_industry=None, sw_l2=None):
     """
     完整行业对比。沪深股走申万二级成分；北交所 / 申万未覆盖股用东财行业映射到申万
     二级，与该行业（沪深为主）同行做跨分类对比（带显式声明）。
@@ -629,6 +653,7 @@ def industry_comparison(code, name=None, em_industry=None):
     Args:
         code: 6 位代码  name: 名称（可选）
         em_industry: 东财行业字符串（北交所/未覆盖股用于映射到申万；沪深股可不传）
+        sw_l2: Wind 申万二级名（如「白酒Ⅱ」）；可得时直连反查图，优先于 em_industry 关键词匹配
     """
     code = str(code)
     cached = _cache_get(f"result_{code}", ttl_days=7)
@@ -643,17 +668,21 @@ def industry_comparison(code, name=None, em_industry=None):
         ind_code = info["ind_code"]
         target_weight = info.get("weight")
     else:
-        matched = _match_sw_by_em(em_industry, rev["industries"]) if em_industry else None
+        # 优先 Wind 申万二级名直连（最权威）；否则退东财行业关键词跨分类
+        matched = _match_sw_by_name(sw_l2, rev["industries"]) if sw_l2 else None
+        if not matched and em_industry:
+            matched = _match_sw_by_em(em_industry, rev["industries"])
         if not matched:
-            if em_industry:
+            hint = sw_l2 or em_industry
+            if hint:
                 return {"available": False,
-                        "reason": f"北交所 / 次新股暂未纳入申万二级成分，且东财行业「{em_industry}」"
+                        "reason": f"北交所 / 次新股暂未纳入申万二级成分，且行业「{hint}」"
                                   "未能匹配到申万行业，无法构建同行对比。"}
             return {"available": False,
                     "reason": "未在申万二级成分中找到该股票（北交所 / 次新 / 申万未覆盖），"
-                              "且无东财行业信息可供映射。"}
+                              "且无行业信息可供映射。"}
         ind_code, sw_name = matched
-        cross = {"em_industry": em_industry, "sw_name": sw_name}
+        cross = {"em_industry": sw_l2 or em_industry, "sw_name": sw_name}
         target_weight = None     # 不在申万成分 → 无权重（市值代理维度不可比）
 
     ind = rev["industries"].get(ind_code, {})

@@ -1,0 +1,298 @@
+# -*- coding: utf-8 -*-
+"""
+Wind 数据通道（第一通道）—— 直连 Wind MCP HTTPS 端点（JSON-RPC 2.0）
+================================================================
+定位：估值（现价 / 总市值 / PE-TTM / PB）与 名称 / 申万行业 的**首选**数据源；
+调用失败、超时或**每日额度用尽（QUOTA）**时返回 None，由上层回退到现有
+akshare / emweb / 年报解析通道。三大报表暂不走 Wind（省额度，按用户选择）。
+
+为什么不走 wind-mcp-skill 的 node CLI：该 CLI 在本机（用户目录含非 ASCII）经 Python
+subprocess 派生时 stdout 恒为空（node 侧 spawn 怪异），故直接复刻其 HTTP 逻辑——
+CLI 本质只是对 https://mcp.wind.com.cn/vserver_*/mcp/ 的 JSON-RPC 裸封装。
+
+额度：Wind 云 API 按积分计费，返回体不含剩余额度 → 只能在报错/限流时判定；判定后本
+进程内后续调用直接短路（`_QUOTA_EXHAUSTED`），避免反复空试。
+安全：WIND_API_KEY 从 ~/.wind-aifinmarket/config 运行时读取，仅驻内存；不写日志、不入库、
+不硬编码。结果进本地缓存（省额度）：行情 12h、名称/行业 30d。
+"""
+
+import os
+import re
+import json
+import time
+
+import requests
+
+# ── 端点 / 配置 ──────────────────────────────────────────────
+_ENDPOINTS = {
+    "stock_data": "https://mcp.wind.com.cn/vserver_stock_data/mcp/",
+}
+_CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".wind-aifinmarket", "config")
+_CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "cache")
+os.makedirs(_CACHE, exist_ok=True)
+
+# 额度/限流关键词（源自 skill cli.mjs 的 QUOTA_ERROR 模式）
+_QUOTA_RE = re.compile(
+    r"单日请求次数超限|daily.*limit|余额不足|请先充值|积分不足|insufficient.*balance"
+    r"|请求过于频繁|qps.*limit|too.*frequent|限流|blocked_quota|quota",
+    re.I)
+
+_QUOTA_EXHAUSTED = False       # 进程内额度熔断
+_INITED = False                # 进程内 MCP initialize 只做一次
+_KEY = None                    # 缓存密钥（仅内存）
+
+
+def quota_exhausted():
+    return _QUOTA_EXHAUSTED
+
+
+# ── 密钥 ─────────────────────────────────────────────────────
+def _read_key():
+    """从 ~/.wind-aifinmarket/config 读取 WIND_API_KEY（dotenv 风格）。仅内存缓存。"""
+    global _KEY
+    if _KEY is not None:
+        return _KEY or None
+    _KEY = ""
+    key = None
+    try:
+        with open(_CONFIG_PATH, encoding="utf-8") as fh:
+            for raw in fh:
+                s = raw.strip().lstrip("﻿")
+                if not s or s.startswith("#") or "=" not in s:
+                    continue
+                if s.startswith("export "):
+                    s = s[7:]
+                k, v = s.split("=", 1)
+                if k.strip() == "WIND_API_KEY":
+                    v = v.strip()
+                    if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
+                        v = v[1:-1]
+                    key = v.strip()
+    except Exception:
+        key = os.environ.get("WIND_API_KEY")
+    _KEY = key or ""
+    return _KEY or None
+
+
+# ── 缓存 ─────────────────────────────────────────────────────
+def _cache_get(key, ttl):
+    p = os.path.join(_CACHE, key + ".json")
+    try:
+        if os.path.exists(p) and (time.time() - os.path.getmtime(p)) < ttl:
+            return json.load(open(p, encoding="utf-8"))
+    except Exception:
+        pass
+    return None
+
+
+def _cache_set(key, val):
+    try:
+        json.dump(val, open(os.path.join(_CACHE, key + ".json"), "w", encoding="utf-8"),
+                  ensure_ascii=False)
+    except Exception:
+        pass
+
+
+# ── HTTP / JSON-RPC ──────────────────────────────────────────
+def _headers(key):
+    return {"Authorization": "Bearer " + key,
+            "Accept": "application/json, text/event-stream",
+            "Content-Type": "application/json"}
+
+
+def _parse_sse(resp):
+    """解析 SSE / 纯 JSON 响应 → payload dict。用 utf-8 解码，按 \\n 切分，取末个 data: 行。"""
+    raw = resp.content.decode("utf-8", "replace").strip()
+    if raw.startswith("{"):
+        return json.loads(raw)
+    last = None
+    for line in raw.split("\n"):
+        line = line.rstrip("\r")
+        if line.startswith("data: "):
+            last = line[6:]
+    if last is None:
+        raise ValueError("响应非 SSE 也非 JSON")
+    return json.loads(last)
+
+
+def _rpc(server, method, params, timeout):
+    ep = _ENDPOINTS[server]
+    body = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+    return requests.post(ep, headers=_headers(_read_key()), json=body, timeout=timeout)
+
+
+def _ensure_init(server):
+    global _INITED
+    if _INITED:
+        return True
+    try:
+        r = _rpc(server, "initialize",
+                 {"protocolVersion": "2025-03-26", "capabilities": {},
+                  "clientInfo": {"name": "stock-analyzer", "version": "5"}}, 30)
+        if r.status_code == 200:
+            _INITED = True
+            return True
+    except Exception as e:
+        print(f"[Wind] initialize 异常: {str(e)[:100]}")
+    return False
+
+
+def _call(server, tool, args, timeout=60):
+    """调 Wind MCP tools/call。返回 (inner_dict, err)；err ∈ {None,'QUOTA','ERR'}。"""
+    global _QUOTA_EXHAUSTED
+    if _QUOTA_EXHAUSTED:
+        return None, "QUOTA"
+    if not _read_key():
+        return None, "ERR"
+    if server not in _ENDPOINTS:
+        return None, "ERR"
+    if not _ensure_init(server):
+        return None, "ERR"
+    try:
+        r = _rpc(server, "tools/call",
+                 {"name": tool, "arguments": args, "_meta": {}}, timeout)
+    except Exception as e:
+        print(f"[Wind] 调用异常: {str(e)[:100]}")
+        return None, "ERR"
+
+    if r.status_code != 200:
+        if r.status_code == 429 or _QUOTA_RE.search(r.text or ""):
+            _QUOTA_EXHAUSTED = True
+            print("[Wind] 额度/限流(HTTP) → 回退原通道")
+            return None, "QUOTA"
+        return None, "ERR"
+
+    try:
+        payload = _parse_sse(r)
+    except Exception:
+        return None, "ERR"
+
+    # JSON-RPC 层错误 / 工具层 isError
+    err_msg = None
+    if isinstance(payload.get("error"), dict):
+        err_msg = payload["error"].get("message") or json.dumps(payload["error"], ensure_ascii=False)
+    result = payload.get("result") or {}
+    if not err_msg and result.get("isError"):
+        try:
+            err_msg = result["content"][0]["text"]
+        except Exception:
+            err_msg = json.dumps(result, ensure_ascii=False)
+
+    inner = None
+    try:
+        inner = json.loads(result["content"][0]["text"])
+    except Exception:
+        inner = None
+
+    # 工具内嵌业务错误
+    if not err_msg and isinstance(inner, dict):
+        if isinstance(inner.get("mcp_tool_error_code"), (int, float)) and inner["mcp_tool_error_code"] != 0:
+            err_msg = inner.get("mcp_tool_error_msg") or "tool error"
+        elif isinstance(inner.get("error"), dict) and (inner["error"].get("code") or inner["error"].get("message")):
+            err_msg = f"{inner['error'].get('code','')}: {inner['error'].get('message','')}"
+
+    if err_msg:
+        if _QUOTA_RE.search(err_msg):
+            _QUOTA_EXHAUSTED = True
+            print("[Wind] 额度/限流 → 回退原通道")
+            return None, "QUOTA"
+        return None, "ERR"
+
+    if inner is None:
+        return None, "ERR"
+    return inner, None
+
+
+# ── 结果解析 ─────────────────────────────────────────────────
+def _rows(inner):
+    """兼容 price_indicators(data.rows) 与 NL 工具(data.data[0].rows) 两种结构。"""
+    d = (inner or {}).get("data") or {}
+    if isinstance(d, dict) and "rows" in d:
+        return d.get("columns") or [], d.get("rows") or []
+    if isinstance(d, dict) and isinstance(d.get("data"), list) and d["data"]:
+        b = d["data"][0]
+        return b.get("columns") or [], b.get("rows") or []
+    return [], []
+
+
+def _row_dict(inner):
+    cols, rows = _rows(inner)
+    if not rows:
+        return None
+    return {cols[i]["name"]: rows[0][i] for i in range(min(len(cols), len(rows[0])))}
+
+
+def _f(v):
+    try:
+        x = float(v)
+        return None if x != x else x
+    except Exception:
+        return None
+
+
+def windcode(code, market=None):
+    """6 位代码 → Wind 代码。market='NEEQ' → .NQ；否则按段：0/3=SZ，4/8/920=BJ，其余 SH。"""
+    c = str(code).strip()
+    if market == "NEEQ":
+        return c + ".NQ"
+    if c.startswith(("0", "3")):
+        return c + ".SZ"
+    if c.startswith(("4", "8", "920")):
+        return c + ".BJ"
+    return c + ".SH"
+
+
+# ── 对外接口 ─────────────────────────────────────────────────
+def market_indicators(code, market=None):
+    """现价 / 总市值(亿) / PE(TTM) / PB(LF)。命中缓存或 Wind；失败 / 额度 / 无数据 → None。"""
+    ck = f"wind_mkt_{code}_{market or ''}"
+    c = _cache_get(ck, 12 * 3600)
+    if c is not None:
+        return c or None
+    inner, err = _call("stock_data", "get_stock_price_indicators",
+                       {"windcode": windcode(code, market),
+                        "indexes": "中文简称,最新成交价,总市值2,市盈率(TTM),市净率(LF)"})
+    if err:
+        return None
+    m = _row_dict(inner)
+    if not m:
+        _cache_set(ck, {})
+        return None
+    res = {"name": m.get("中文简称"), "price": _f(m.get("最新成交价")),
+           "mktcap": _f(m.get("总市值2")), "pe_ttm": _f(m.get("市盈率(TTM)")),
+           "pb": _f(m.get("市净率(LF)"))}
+    _cache_set(ck, res)
+    return res
+
+
+def basic_info(code, market=None):
+    """证券简称 + 申万行业。返回 {name, sw_l2(二级名), sw_full(全链)}；失败 / 额度 → None。"""
+    ck = f"wind_basic_{code}_{market or ''}"
+    c = _cache_get(ck, 30 * 86400)
+    if c is not None:
+        return c or None
+    inner, err = _call("stock_data", "get_stock_basicinfo",
+                       {"question": windcode(code, market) + "的证券简称和所属申万行业"})
+    if err:
+        return None
+    m = _row_dict(inner)
+    if not m:
+        _cache_set(ck, {})
+        return None
+    sw_full = str(m.get("所属申万行业明细") or "").strip()
+    parts = [p for p in sw_full.split("--") if p]
+    sw_l2 = parts[1] if len(parts) >= 2 else (parts[0] if parts else None)
+    res = {"name": m.get("证券简称") or m.get("中文简称"), "sw_l2": sw_l2, "sw_full": sw_full}
+    _cache_set(ck, res)
+    return res
+
+
+# 自测：python wind_data.py 600519 874628
+if __name__ == "__main__":
+    import sys
+    codes = sys.argv[1:] or ["600519"]
+    for c in codes:
+        mk = "NEEQ" if c.startswith(("4", "8", "9")) and len(c) == 6 else None
+        print(f"\n=== {c} (market={mk}) ===")
+        print("market:", json.dumps(market_indicators(c, mk), ensure_ascii=True))
+        print("basic :", json.dumps(basic_info(c, mk), ensure_ascii=True))
