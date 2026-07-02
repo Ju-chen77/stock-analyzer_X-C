@@ -1035,7 +1035,58 @@ def _get_pe_history(code):
     return _get_pe_history_ak(code)
 
 
-def compute_valuation(code, raw, price):
+# ── 周期股 / 金融股判定（用于 PB 估值路径路由）──────────────────
+_CYCLICAL_KW = [
+    "石油石化", "基础化工", "钢铁", "有色金属", "煤炭", "建筑材料", "房地产",
+    "化学原料", "化学纤维", "化纤", "水泥", "玻璃",
+    "航运", "港口", "航空", "养殖", "生猪", "畜禽",
+]
+_FINANCIAL_KW = ["银行", "证券", "保险", "非银金融", "多元金融"]
+
+
+def _roe_series(income, balance, periods):
+    """按年 ROE(%) = 归母净利润 / 归母权益，与 periods 对齐（缺失 None）。"""
+    prof_col = fcol(income, "归属于母公司所有者的净利润", "净利润")
+    profits  = col_vals(income, prof_col, periods) if prof_col else [None] * len(periods)
+    equity   = _get_equity(balance, periods) if balance is not None else [None] * len(periods)
+    out = []
+    for p, e in zip(profits, equity):
+        out.append(round(p / e * 100, 2) if (p is not None and e not in (None, 0)) else None)
+    return out
+
+
+def _detect_cyclical(industry, eps_vals, roe_vals=None, eps_growth=None):
+    """
+    周期股 / 金融股判定（简明三步）。返回 {cyclical, financial, reason}。
+
+      Step1 金融：银行/券商/保险 → financial（PB 惯例，另立口径）
+      Step2 行业白名单（主）：申万强周期行业关键词命中 → cyclical
+      Step3 盈利波动（辅，抓白名单外隐性周期，任一命中）：
+            近年亏损 / EPS峰谷比≥3 / |3年EPS增速|>40% / ROE极差≥20pct
+    """
+    ind = str(industry or "")
+    if any(k in ind for k in _FINANCIAL_KW):
+        return {"cyclical": False, "financial": True, "reason": "金融业（PB 惯例）"}
+
+    reasons = []
+    if any(k in ind for k in _CYCLICAL_KW):
+        reasons.append("周期行业")
+    eps = [e for e in (eps_vals or []) if e is not None]
+    pos = [e for e in eps if e > 0]
+    if eps and min(eps) < 0:
+        reasons.append("近年亏损")
+    if len(pos) >= 2 and min(pos) > 0 and max(pos) / min(pos) >= 3:
+        reasons.append("EPS峰谷比≥3")
+    if eps_growth is not None and abs(eps_growth) > 0.40:
+        reasons.append("3年EPS增速极端")
+    rr = [r for r in (roe_vals or []) if r is not None]
+    if len(rr) >= 3 and (max(rr) - min(rr)) >= 20:
+        reasons.append("ROE极差≥20pct")
+
+    return {"cyclical": bool(reasons), "financial": False, "reason": "、".join(reasons)}
+
+
+def compute_valuation(code, raw, price, industry=""):
     """
     PE/PB 估值模块：
       - 历史 PE/PB 序列 + 当前分位数
@@ -1047,6 +1098,7 @@ def compute_valuation(code, raw, price):
     income = raw.get("income")
     if income is None or price is None:
         return {}
+    balance = raw.get("balance")
 
     # ── 历史 PE/PB 序列 ────────────────────────────────────
     pe_hist_df = _get_pe_history(code)
@@ -1100,10 +1152,12 @@ def compute_valuation(code, raw, price):
 
     peg = sdiv(pe_current, (eps_growth or 0) * 100) if (pe_current and eps_growth and eps_growth > 0) else None
 
-    # 周期 / 盈利剧烈波动识别（用于估值口径护栏提示）：近年出现亏损，或 3 年 CAGR 极端
-    _eps_min = min([e for e in eps_vals if e is not None], default=None)
-    cyclical = bool((_eps_min is not None and _eps_min < 0)
-                    or (eps_growth is not None and abs(eps_growth) > 0.40))
+    # 周期股 / 金融股判定（行业白名单 + 盈利波动）→ 决定是否走 PB 路径
+    roe_vals = _roe_series(income, balance, periods)
+    _cyc = _detect_cyclical(industry, eps_vals, roe_vals, eps_growth)
+    cyclical        = _cyc["cyclical"]
+    financial       = _cyc["financial"]
+    cyclical_reason = _cyc["reason"]
 
     # ── 动态 PE：现价 / 最新报告期 EPS 年化（累计EPS × 4/季度数）──────
     #    纯已披露数据、不含预测；季报年化对季节性强的标的会有偏差（动态市盈率固有口径）
@@ -1195,6 +1249,37 @@ def compute_valuation(code, raw, price):
                 "upside":       round(up * 100, 1) if up is not None else None,
             })
 
+    # ── 周期 / 金融股 PB 估值路径（穿越周期）────────────────────
+    #    以 历史 PB 分位 × BVPS 定目标价（PB 比低谷 EPS 稳）；正常化 ROE = 周期 ROE 均值
+    pb_path = None
+    if (cyclical or financial) and pb_current and pb_current > 0 and pb_series:
+        bvps = price / pb_current                       # 每股净资产 = 现价 / 当前PB
+        s = pd.Series([x for x in pb_series if x and x > 0])
+        if len(s) >= 6 and bvps > 0:
+            pb_lo, pb_mid, pb_hi = (float(s.quantile(0.25)), float(s.quantile(0.50)), float(s.quantile(0.75)))
+            rr = [r for r in roe_vals if r is not None]
+            norm_roe = round(sum(rr) / len(rr), 1) if rr else None
+            norm_eps = round(norm_roe / 100 * bvps, 2) if norm_roe else None
+            pb_scen = []
+            for label, pbx in [("悲观", pb_lo), ("中性", pb_mid), ("乐观", pb_hi)]:
+                tp = pbx * bvps
+                up = sdiv(tp - price, price)
+                pb_scen.append({"scenario": label, "pb": round(pbx, 2),
+                                "target_price": round(tp, 2),
+                                "upside": round(up * 100, 1) if up is not None else None})
+            pb_path = {
+                "financial":     financial,
+                "pb_current":    round(pb_current, 2),
+                "pb_median":     round(pb_mid, 2),
+                "pb_percentile": round(pb_pct, 0) if pb_pct is not None else None,
+                "bvps":          round(bvps, 2),
+                "norm_roe":      norm_roe,
+                "norm_eps":      norm_eps,
+                "scenarios":     pb_scen,
+                "target":        {"low": round(pb_lo * bvps, 2), "mid": round(pb_mid * bvps, 2),
+                                  "high": round(pb_hi * bvps, 2)},
+            }
+
     return {
         "pe_current":    round(pe_current, 1)  if pe_current  else None,
         "pb_current":    round(pb_current, 2)  if pb_current  else None,
@@ -1208,7 +1293,10 @@ def compute_valuation(code, raw, price):
         "eps_annual":    round(eps_annual, 2)  if eps_annual  else None,
         "eps_forward":   round(eps_forward, 2) if eps_forward else None,
         "eps_growth_3y": round(eps_growth * 100, 1) if eps_growth else None,
-        "cyclical":      cyclical,
+        "cyclical":       cyclical,
+        "financial":      financial,
+        "cyclical_reason": cyclical_reason,
+        "pb_path":        pb_path,
         "matrix":        matrix,
         "positive_count": positive_count,
         "scenarios":     scenarios,
@@ -1832,7 +1920,7 @@ def api_analyze():
     perf  = compute_performance(raw, code)
     attr  = compute_attribution(raw)
     risk  = compute_risk(raw)
-    val   = compute_valuation(code, raw, price)
+    val   = compute_valuation(code, raw, price, industry=industry)
     _inject_wind_multiples(val, wmkt)         # Wind 权威 PE(TTM)/PB/市值 覆盖当前倍数
     _build_pe_panel(val, price, wmkt)         # 三口径 PE：静态 / TTM / 动态
     fcst  = compute_forecast(raw, val, price)
@@ -1858,7 +1946,7 @@ def api_analyze():
             perf = compute_performance(raw, code)
             attr = compute_attribution(raw)
             risk = compute_risk(raw)
-            val  = compute_valuation(code, raw, price)
+            val  = compute_valuation(code, raw, price, industry=industry)
             fcst = compute_forecast(raw, val, price)
             seg  = (nmeta.get("segment") or {}) if nmeta else {}
 

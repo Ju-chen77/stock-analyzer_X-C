@@ -494,7 +494,8 @@ footer{width:100%;font-family:var(--mono);font-size:12px;
       </div>
 
       <div id="val-cyclical-warn"></div>
-      <p class="sec-label" style="margin-top:28px">三角验证 · 目标价区间</p>
+      <div id="val-pb-path"></div>
+      <p class="sec-label" style="margin-top:28px">三角验证 · 目标价区间（PE 法）</p>
       <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:28px"
            id="val-targets"></div>
 
@@ -1753,6 +1754,38 @@ function renderValuation(val) {
       + '⚠️ <b>周期股 / 盈利大幅波动</b>：该股近年出现过亏损或 EPS 剧烈波动，PE × EPS 估值对周期股天然失真，'
       + '下方目标价区间与情景仅供方向性参考，建议结合 <b>PB</b> 与穿越周期（正常化）EPS 判断。</div>'
     : '';
+
+  // ── 周期 / 金融股 PB 估值路径（优先于 PE 情景）──
+  const pbEl = $('#val-pb-path');
+  const PB = val && val.pb_path;
+  if (pbEl) {
+    if (!PB) {
+      pbEl.innerHTML = '';
+    } else {
+      const money = v => (v == null ? '—' : '¥' + Number(v).toFixed(2));
+      const upTxt = v => (v == null ? '' : (v > 0 ? '+' : '') + v + '%');
+      const title = PB.financial ? '金融股 PB 估值（历史 PB 中枢）' : '周期股 PB 估值 · 穿越周期';
+      const cards = (PB.scenarios || []).map(s => {
+        const cls = s.scenario === '悲观' ? 'red' : (s.scenario === '乐观' ? 'green' : 'yellow');
+        return '<div class="dash-card ' + cls + '" style="padding:14px 12px">'
+          + '<div class="d-head"><span class="d-dot ' + cls + '"></span><span class="d-name">' + s.scenario + '（PB ' + s.pb + '×）</span></div>'
+          + '<div class="d-val" style="font-size:20px">' + money(s.target_price) + '</div>'
+          + '<div class="d-unit">' + upTxt(s.upside) + '</div></div>';
+      }).join('');
+      let stats = '<span>当前 PB <b style="color:var(--ink)">' + PB.pb_current + '×</b></span>'
+        + '<span>历史中位 <b style="color:var(--ink)">' + PB.pb_median + '×</b>'
+        + (PB.pb_percentile != null ? '（分位 ' + Math.round(PB.pb_percentile) + '%）' : '') + '</span>'
+        + '<span>BVPS <b style="color:var(--ink)">' + money(PB.bvps) + '</b></span>';
+      if (PB.norm_roe != null) stats += '<span>正常化 ROE <b style="color:var(--ink)">' + PB.norm_roe + '%</b></span>';
+      if (PB.norm_eps != null) stats += '<span>正常化 EPS <b style="color:var(--ink)">' + money(PB.norm_eps) + '</b></span>';
+      pbEl.innerHTML =
+        '<p class="sec-label" style="margin-top:24px">' + title + '</p>'
+        + '<div style="display:flex;gap:18px;flex-wrap:wrap;font-family:var(--mono);font-size:13px;color:var(--muted);margin-bottom:12px">' + stats + '</div>'
+        + '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px">' + cards + '</div>'
+        + '<p class="chart-note" style="margin-top:8px">目标价 = 目标 PB × BVPS；目标 PB 取历史 PB 的 25 / 50 / 75 分位。'
+        + '正常化 ROE 为周期内 ROE 均值，正常化 EPS = 正常化 ROE × BVPS。<b style="color:var(--ink)">周期 / 金融股此 PB 路径优先于下方 PE 情景</b>。</p>';
+    }
+  }
 
   if (!val || !val.matrix) return;
 
