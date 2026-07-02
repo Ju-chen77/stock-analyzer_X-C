@@ -1080,9 +1080,9 @@ def compute_valuation(code, raw, price):
     profit_col = fcol(income, "归属于母公司所有者的净利润", "净利润")
 
     eps_vals = col_vals(income, eps_col, periods) if eps_col else [None] * len(periods)
-    eps_latest = next((e for e in eps_vals if e is not None and e > 0), None)
+    eps_annual = next((e for e in eps_vals if e is not None and e > 0), None)   # 最新正年报 EPS
 
-    # 3 年历史 EPS CAGR 作为增速代理
+    # 3 年历史 EPS CAGR 作为增速代理（周期峰谷会算出极端值，外推时加护栏）
     eps_growth = None
     valid = [(i, e) for i, e in enumerate(eps_vals) if e is not None and e > 0]
     if len(valid) >= 4:
@@ -1090,10 +1090,20 @@ def compute_valuation(code, raw, price):
         if e_old > 0:
             eps_growth = (e_new / e_old) ** (1 / 3) - 1
 
-    eps_forward = eps_latest * (1 + eps_growth) if (eps_latest and eps_growth is not None) else eps_latest
+    # 估值基准 EPS：优先 TTM（现价 / TTM-PE，与模型 PE 中位口径一致），退最新年报 EPS。
+    # 避免「TTM 口径的 PE」乘到「滞后 / 低谷年报 EPS」上——周期股低谷年报会严重低估。
+    eps_ttm = sdiv(price, pe_current) if (pe_current and pe_current > 0) else eps_annual
 
-    pe_from_price = sdiv(price, eps_latest) if (eps_latest and eps_latest > 0) else None
-    peg           = sdiv(pe_from_price, (eps_growth or 0) * 100) if (pe_from_price and eps_growth and eps_growth > 0) else None
+    # 外推增速护栏：不把周期峰谷算出的极端 CAGR（如 -56%）直接外推
+    g_fwd       = max(-0.10, min(0.30, eps_growth)) if eps_growth is not None else None
+    eps_forward = eps_ttm * (1 + g_fwd) if (eps_ttm and g_fwd is not None) else eps_ttm
+
+    peg = sdiv(pe_current, (eps_growth or 0) * 100) if (pe_current and eps_growth and eps_growth > 0) else None
+
+    # 周期 / 盈利剧烈波动识别（用于估值口径护栏提示）：近年出现亏损，或 3 年 CAGR 极端
+    _eps_min = min([e for e in eps_vals if e is not None], default=None)
+    cyclical = bool((_eps_min is not None and _eps_min < 0)
+                    or (eps_growth is not None and abs(eps_growth) > 0.40))
 
     # ── 动态 PE：现价 / 最新报告期 EPS 年化（累计EPS × 4/季度数）──────
     #    纯已披露数据、不含预测；季报年化对季节性强的标的会有偏差（动态市盈率固有口径）
@@ -1194,9 +1204,11 @@ def compute_valuation(code, raw, price):
         "pe_percentile": round(pe_pct, 0)      if pe_pct is not None else None,
         "pb_percentile": round(pb_pct, 0)      if pb_pct is not None else None,
         "peg":           round(peg, 2)          if peg         else None,
-        "eps_ttm":       round(eps_latest, 2)  if eps_latest  else None,
+        "eps_ttm":       round(eps_ttm, 2)     if eps_ttm     else None,
+        "eps_annual":    round(eps_annual, 2)  if eps_annual  else None,
         "eps_forward":   round(eps_forward, 2) if eps_forward else None,
         "eps_growth_3y": round(eps_growth * 100, 1) if eps_growth else None,
+        "cyclical":      cyclical,
         "matrix":        matrix,
         "positive_count": positive_count,
         "scenarios":     scenarios,
@@ -1251,8 +1263,8 @@ def _build_pe_panel(val, price, wmkt):
 
     ttm = wmkt.get("pe_ttm") or val.get("pe_current")
     static = wmkt.get("pe_lyr")
-    if static is None and price and val.get("eps_ttm") and val["eps_ttm"] > 0:
-        static = price / val["eps_ttm"]
+    if static is None and price and val.get("eps_annual") and val["eps_annual"] > 0:
+        static = price / val["eps_annual"]     # 静态用最新年报 EPS（非 TTM）
 
     val["pe_panel"] = {
         "static":         round(static, 1) if static else None,
