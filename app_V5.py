@@ -173,16 +173,19 @@ def _get_equity(balance, periods):
     提取股东权益，兼容多种列名。
     找不到直接列时用「资产总计 − 负债合计」反推，确保杜邦和 ROE 不因列名问题缺失。
     """
-    # 尝试多种新浪/东财列名写法
-    eq_col = fcol(balance,
-                  "所有者权益(或股东权益)合计",
-                  "归属于母公司所有者权益合计",
-                  "所有者权益合计",
-                  "股东权益合计",
-                  "所有者权益",
-                  "股东权益")
-    if eq_col:
-        return col_vals(balance, eq_col, periods)
+    # 逐候选尝试，跳过全空的表头列（银行「股东权益」常是空表头，真值在「归属于母公司股东权益」）
+    for cand in ("所有者权益(或股东权益)合计",
+                 "归属于母公司所有者权益合计",
+                 "所有者权益合计",
+                 "股东权益合计",
+                 "归属于母公司股东权益",     # 银行 / 部分金融的归母权益写法
+                 "所有者权益",
+                 "股东权益"):
+        col = fcol(balance, cand)
+        if col:
+            vals = col_vals(balance, col, periods)
+            if any(v is not None for v in vals):
+                return vals
 
     # 兜底：资产 − 负债
     assets_col = fcol(balance, "资产总计")
@@ -192,6 +195,7 @@ def _get_equity(balance, periods):
         liabs  = col_vals(balance, liab_col,   periods)
         return [a - l if (a is not None and l is not None) else None
                 for a, l in zip(assets, liabs)]
+    return [None] * len(periods)
 
     return [None] * len(periods)
 
