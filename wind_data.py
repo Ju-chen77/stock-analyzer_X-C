@@ -244,14 +244,22 @@ def windcode(code, market=None):
 
 # ── 对外接口 ─────────────────────────────────────────────────
 def market_indicators(code, market=None):
-    """现价 / 总市值(亿) / PE(TTM) / PB(LF)。命中缓存或 Wind；失败 / 额度 / 无数据 → None。"""
+    """
+    现价 / 总市值 / 三视角 PE / PB。命中缓存或 Wind；失败 / 额度 / 无数据 → None。
+
+    三视角 PE 同一次调用取回（零额外额度）：
+      pe_ttm = 市盈率(TTM)   当前实况
+      pe_lyr = 市盈率(LYR)   静态（上年报口径，去年基准）
+      pe_fwd = 市盈率(预测)  前瞻（Wind 一致预期口径）
+    """
     ck = f"wind_mkt_{code}_{market or ''}"
     c = _cache_get(ck, 12 * 3600)
     if c is not None:
         return c or None
     inner, err = _call("stock_data", "get_stock_price_indicators",
                        {"windcode": windcode(code, market),
-                        "indexes": "中文简称,最新成交价,总市值2,市盈率(TTM),市净率(LF)"})
+                        "indexes": "中文简称,最新成交价,总市值2,"
+                                   "市盈率(TTM),市盈率(LYR),市盈率(预测),市净率(LF)"})
     if err:
         return None
     m = _row_dict(inner)
@@ -259,8 +267,106 @@ def market_indicators(code, market=None):
         _cache_set(ck, {})
         return None
     res = {"name": m.get("中文简称"), "price": _f(m.get("最新成交价")),
-           "mktcap": _f(m.get("总市值2")), "pe_ttm": _f(m.get("市盈率(TTM)")),
-           "pb": _f(m.get("市净率(LF)"))}
+           "mktcap": _f(m.get("总市值2")),
+           "pe_ttm": _f(m.get("市盈率(TTM)")), "pe_lyr": _f(m.get("市盈率(LYR)")),
+           "pe_fwd": _f(m.get("市盈率(预测)")), "pb": _f(m.get("市净率(LF)"))}
+    _cache_set(ck, res)
+    return res
+
+
+def consensus(code, market=None):
+    """
+    一致预期覆盖度：评级机构家数（Forward PE 的覆盖广度代理）。
+
+    Wind 行情指标里没有「一致预期机构数」字段，改用 get_stock_fundamentals 的
+    「评级机构家数」——即对该标的出具评级 / 盈利预测的机构数量。无覆盖 / 小盘股
+    多为空。返回 {coverage:int|None}；失败 / 额度 → None。缓存 12h。
+    """
+    ck = f"wind_cons_{code}_{market or ''}"
+    c = _cache_get(ck, 12 * 3600)
+    if c is not None:
+        return c or None
+    inner, err = _call("stock_data", "get_stock_fundamentals",
+                       {"question": windcode(code, market) + " 评级机构家数"})
+    if err:
+        return None
+    m = _row_dict(inner)
+    if not m:
+        _cache_set(ck, {})
+        return None
+    cov = None
+    for k, v in m.items():
+        if "机构家数" in k or "评级机构" in k:
+            cov = _f(v)
+            break
+    res = {"coverage": int(cov) if cov is not None else None}
+    _cache_set(ck, res)
+    return res
+
+
+# 行业对比用指标（最近完整会计年度，年度口径以匹配阈值/分位设计）
+_METRICS_Q = (
+    " 最近一个完整会计年度的 净资产收益率ROE、总资产净利率ROA、销售毛利率、销售净利率、"
+    "资产负债率、总资产周转率、营业总收入同比增长率、归属母公司股东的净利润同比增长率、"
+    "应收账款周转率、存货周转率、流动比率、总资产、基本每股收益、每股净资产、"
+    "经营活动产生的现金流量净额与净利润之比"
+)
+
+
+def stock_metrics(code, market=None):
+    """
+    行业对比用的单只标准化指标（最近完整会计年度），走 get_stock_fundamentals。
+
+    返回与 industry_compare._extract_metrics 同构的 dict（roe/roa/gross_margin/net_margin/
+    debt_ratio/asset_turnover/rev_growth/profit_growth/ar_turnover/inv_turnover/current_ratio/
+    interest_cover/ocf_to_ni/total_assets/eps/bvps），total_assets 归一到元；失败/额度 → None。
+    缓存 30d（年度指标变动慢）。
+    """
+    ck = f"wind_metrics_{code}_{market or ''}"
+    c = _cache_get(ck, 30 * 86400)
+    if c is not None:
+        return c or None
+    inner, err = _call("stock_data", "get_stock_fundamentals",
+                       {"question": windcode(code, market) + _METRICS_Q})
+    if err:
+        return None
+    m = _row_dict(inner)
+    if not m:
+        _cache_set(ck, {})
+        return None
+
+    def pick(req, exclude=()):
+        reqs = [req] if isinstance(req, str) else list(req)
+        for col, v in m.items():
+            if all(r in str(col) for r in reqs) and not any(e in str(col) for e in exclude):
+                return _f(v)
+        return None
+
+    total = pick("总资产", exclude=("周转", "净利率", "报酬", "ROA", "收益"))
+    ocf = pick(["现金", "净利润"], exclude=("增长",))
+    if ocf is not None and abs(ocf) <= 5:      # 倍数(0.95) → 折算百分比
+        ocf = round(ocf * 100, 2)
+    res = {
+        "roe":            pick("ROE"),
+        "roa":            pick("ROA"),
+        "gross_margin":   pick("毛利率"),
+        "net_margin":     pick("销售净利率"),
+        "debt_ratio":     pick("资产负债率"),
+        "asset_turnover": pick("总资产周转"),
+        "rev_growth":     pick(["营业总收入", "增长"]),
+        "profit_growth":  pick(["净利润", "增长"]),
+        "ar_turnover":    pick("应收账款周转"),
+        "inv_turnover":   pick("存货周转"),
+        "current_ratio":  pick("流动比率"),
+        "interest_cover": None,
+        "ocf_to_ni":      ocf,
+        "total_assets":   (total * 1e8 if total is not None else None),   # 亿元 → 元
+        "eps":            pick("每股收益"),
+        "bvps":           pick("每股净资产"),
+    }
+    if res["roe"] is None and res["net_margin"] is None:   # 基本没取到 → 失败
+        _cache_set(ck, {})
+        return None
     _cache_set(ck, res)
     return res
 

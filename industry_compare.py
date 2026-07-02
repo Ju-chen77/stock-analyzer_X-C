@@ -258,19 +258,99 @@ def _extract_metrics(df):
     }
 
 
-def get_stock_metrics(code, ttl_days=7):
-    """单只股票标准化指标，缓存 7 天（跨行业共享，框架 L2）。"""
-    key = f"metrics_{code}"
+def _extract_metrics_abstract(df):
+    """
+    从 akshare stock_financial_abstract（关键指标，东财源）提炼标准化指标——取最新**年报**
+    (1231) 列，年度口径。替代已失效的新浪 stock_financial_analysis_indicator 作回退。
+    total_assets 无直接项 → 由 股东权益合计 / (1 − 资产负债率) 反推（元）。
+    """
+    if df is None or df.empty or df.shape[1] < 3:
+        return None
+    cols = list(df.columns)
+    label_col = cols[1]
+    period_cols = [c for c in cols[2:] if str(c).isdigit() and len(str(c)) == 8]
+    annual = [c for c in period_cols if str(c).endswith("1231")]
+    col = (sorted(annual)[-1] if annual else (sorted(period_cols)[-1] if period_cols else None))
+    if col is None:
+        return None
+
+    lab2val = {}
+    for _, r in df.iterrows():
+        lab = str(r[label_col])
+        if lab not in lab2val:
+            lab2val[lab] = sf(r[col])
+
+    def g(*names):
+        for n in names:
+            for lab, v in lab2val.items():
+                if n in lab:
+                    return v
+        return None
+
+    equity = g("股东权益合计", "净资产)")           # 元（含少数股东权益）
+    debt   = g("资产负债率")
+    total_assets = (equity / (1 - debt / 100.0)) if (equity is not None and debt is not None and debt < 100) else None
+    ocf = g("经营活动净现金/归属母公司", "经营活动净现金", "现金净流量/归属")
+    if ocf is not None and abs(ocf) <= 5:            # 倍数 → 百分比
+        ocf = round(ocf * 100, 2)
+
+    return {
+        "roe":            g("净资产收益率(ROE)", "净资产收益率"),
+        "roa":            g("总资产报酬率(ROA)", "总资产报酬率"),
+        "gross_margin":   g("毛利率"),
+        "net_margin":     g("销售净利率"),
+        "debt_ratio":     debt,
+        "asset_turnover": g("总资产周转率"),
+        "rev_growth":     g("营业总收入增长率"),
+        "profit_growth":  g("归属母公司净利润增长率", "净利润增长率"),
+        "ar_turnover":    g("应收账款周转率"),
+        "inv_turnover":   g("存货周转率"),
+        "current_ratio":  g("流动比率"),
+        "interest_cover": None,
+        "ocf_to_ni":      ocf,
+        "total_assets":   total_assets,
+        "eps":            g("基本每股收益"),
+        "bvps":           g("每股净资产"),
+    }
+
+
+def _metrics_ok(m):
+    """指标是否可用：至少 ROE 或 净利率 拿到（防全空 dict 冒充成功）。"""
+    return bool(m) and (m.get("roe") is not None or m.get("net_margin") is not None)
+
+
+def get_stock_metrics(code, ttl_days=7, use_wind=False):
+    """
+    单只股票标准化指标，缓存 7 天（跨行业共享，框架 L2）。
+
+    通道（用户既定：目标股走 Wind、成分池走东财，兼顾权威与额度）：
+      use_wind=True （目标股）：① Wind（wind_data.stock_metrics，年度口径，权威）
+                               → ② 东财关键指标回退
+      use_wind=False（成分池）：仅东财关键指标 stock_financial_abstract（免费可达，年度口径）
+    原新浪 stock_financial_analysis_indicator 源站改版已失效，不再使用。
+    两通道均年度口径、量纲一致（total_assets 均为元），可比；缓存键按通道区分避免互相覆盖。
+    """
+    key = f"metrics_{'w_' if use_wind else ''}{code}"
     c = _cache_get(key, ttl_days=ttl_days)
     if c is not None:
         return c.get("m")
+
     m = None
-    try:
-        y = datetime.date.today().year - 4
-        df = ak.stock_financial_analysis_indicator(symbol=code, start_year=str(y))
-        m = _extract_metrics(df)
-    except Exception as e:
-        print(f"[行业对比] 指标抓取失败 {code}: {str(e)[:80]}")
+    if use_wind:                      # 目标股才走 Wind（一次；成分池不走，省额度）
+        try:
+            import wind_data as _wd
+            m = _wd.stock_metrics(code)
+        except Exception as e:
+            print(f"[行业对比] Wind 指标失败 {code}: {str(e)[:60]}")
+            m = None
+    if not _metrics_ok(m):            # 成分池 / Wind 失败 / 额度用尽 → 东财关键指标
+        try:
+            df = ak.stock_financial_abstract(symbol=code)
+            m = _extract_metrics_abstract(df)
+        except Exception as e:
+            print(f"[行业对比] abstract 指标失败 {code}: {str(e)[:60]}")
+            m = m or None
+
     _cache_set(key, {"m": m})
     return m
 
@@ -698,7 +778,7 @@ def industry_comparison(code, name=None, em_industry=None, sw_l2=None):
     # 确保目标在池内（沪深成分股本就在；北交所/未覆盖股需单独抓取补入）
     target_row = next((p for p in pool if p["code"] == code), None)
     if target_row is None:
-        tm = get_stock_metrics(code)
+        tm = get_stock_metrics(code, use_wind=True)   # 目标股：Wind 第一 → 东财回退
         if tm is None and cross:        # 新三板 / 申万未覆盖：用年报解析的财务算指标
             try:
                 import neeq_data as _nq
@@ -710,6 +790,11 @@ def industry_comparison(code, name=None, em_industry=None, sw_l2=None):
         target_row = {"code": code, "name": name or "本公司",
                       "weight": target_weight, "metrics": tm}
         pool = [target_row] + pool
+    else:
+        # 目标已在成分池内（池走东财）→ 目标单独用 Wind 覆盖为权威口径，成分池保持东财
+        tw = get_stock_metrics(code, use_wind=True)
+        if _metrics_ok(tw):
+            target_row = {**target_row, "metrics": tw}
 
     # 清洗：剔除 ROE 极端值的样本用于中位/分位（保留目标）
     def _valid(p):

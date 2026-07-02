@@ -981,70 +981,57 @@ def compute_risk(raw):
 # ═══════════════════════════════════════════════════════════════
 def _get_pe_history_ak(code):
     """
-    用 akshare 日线（新浪源）重采样为月线 + 财务指标计算历史 PE/PB。
-    Returns: DataFrame [date, pe, pb]
+    东财日频估值（stock_value_em）→ 历史 PE-TTM / PB 序列（近 5 年，日频）。
+
+    替代已失效的新浪 stock_financial_analysis_indicator 通路——新浪旧财务指标页
+    (vFD_FinancialGuideLine) 改版后 akshare 解析崩（soup.find(id='con02-1') 返回 None
+    → 'NoneType' object has no attribute 'find'）。stock_value_em 直接给日频
+    PE(TTM)/PE(静)/市净率/总市值等，2018 至今、可达，且 PE-TTM 与 Wind 口径一致
+    （实测 600519：18.03 对 18.03）。
+
+    Returns: DataFrame [date(YYYYMMDD), pe, pb]，本期在最后一行。失败 → None
     """
     try:
-        daily = ak.stock_zh_a_daily(symbol=to_sina_code(code), adjust="")
-        if daily is None or daily.empty:
-            return None
-        daily["dt"] = pd.to_datetime(daily["date"], errors="coerce")
-        daily = daily.dropna(subset=["dt", "close"])
-        daily = daily[daily["dt"] >= pd.Timestamp("2019-01-01")]
-        freq = "ME" if hasattr(pd.tseries.offsets, "MonthEnd") else "M"
-        try:
-            monthly = daily.set_index("dt").resample(freq)["close"].last().reset_index()
-        except ValueError:
-            monthly = daily.set_index("dt").resample("M")["close"].last().reset_index()
-        monthly["date"] = monthly["dt"].dt.strftime("%Y%m%d")
-        price_df = monthly[["date", "close"]].dropna()
-        if price_df.empty:
+        df = ak.stock_value_em(symbol=code)
+        if df is None or df.empty:
             return None
     except Exception as e:
-        print(f"[ERR] 月线价格: {e}")
+        print(f"[ERR] 东财日频估值(stock_value_em): {e}")
         return None
 
-    try:
-        ind_df = ak.stock_financial_analysis_indicator(symbol=code, start_year="2019")
-        if ind_df is None or ind_df.empty:
-            return None
-        ind_df["_d"] = ind_df["日期"].astype(str).str.replace("-", "", regex=False).str[:8]
-        ann = ind_df[ind_df["_d"].str.endswith("1231")].copy()
-        eps_col  = "摊薄每股收益(元)"
-        bvps_col = "每股净资产_调整前(元)"
-        if eps_col not in ann.columns:
-            return None
-        ann = ann[["_d", eps_col, bvps_col]].copy()
-        ann[eps_col]  = pd.to_numeric(ann[eps_col],  errors="coerce")
-        ann[bvps_col] = pd.to_numeric(ann[bvps_col], errors="coerce")
-        ann = ann.sort_values("_d")
-    except Exception as e:
-        print(f"[ERR] 财务指标: {e}")
+    cols = list(df.columns)
+
+    def _col(*keys):
+        for k in keys:
+            for c in cols:
+                if k in str(c):
+                    return c
         return None
 
-    rows = []
-    for _, row in price_df.iterrows():
-        d     = row["date"]
-        close = sf(row["close"])
-        if close is None or close <= 0:
-            continue
-        past = ann[ann["_d"] <= d]
-        if past.empty:
-            continue
-        last     = past.iloc[-1]
-        eps_val  = sf(last[eps_col])
-        bvps_val = sf(last[bvps_col])
-        pe = sdiv(close, eps_val)  if (eps_val  and eps_val  > 0) else None
-        pb = sdiv(close, bvps_val) if (bvps_val and bvps_val > 0) else None
-        rows.append({"date": d, "pe": pe, "pb": pb})
-
-    if not rows:
+    date_c = _col("数据日期", "日期") or cols[0]
+    pe_c   = _col("PE(TTM)", "市盈率(TTM)", "市盈率")
+    pb_c   = _col("市净率", "PB")
+    if pe_c is None:
         return None
-    return pd.DataFrame(rows)
+
+    out = pd.DataFrame({
+        "dt": pd.to_datetime(df[date_c], errors="coerce"),
+        "pe": pd.to_numeric(df[pe_c], errors="coerce"),
+        "pb": (pd.to_numeric(df[pb_c], errors="coerce") if pb_c else pd.NA),
+    }).dropna(subset=["dt"]).sort_values("dt")
+    if out.empty:
+        return None
+
+    # 近 5 年（与图注「近 5 年」一致）；保留日频，Plotly 可平滑渲染、分位样本更充分
+    cutoff = out["dt"].max() - pd.DateOffset(years=5)
+    out = out[out["dt"] >= cutoff].copy()
+    out["date"] = out["dt"].dt.strftime("%Y%m%d")
+    res = out[["date", "pe", "pb"]].dropna(subset=["pe"])
+    return res if not res.empty else None
 
 
 def _get_pe_history(code):
-    """akshare 月线 + 财务指标计算历史 PE/PB"""
+    """历史 PE/PB 序列（东财日频估值 stock_value_em）"""
     return _get_pe_history_ak(code)
 
 
@@ -1216,13 +1203,61 @@ def _inject_wind_multiples(val, wmkt):
     """
     if not isinstance(val, dict) or not val or not wmkt:
         return
-    if wmkt.get("pe_ttm") is not None:
+    # 仅在历史序列(stock_value_em)未给出当前倍数时用 Wind 兜底，
+    # 否则以序列末值为准，保证「历史趋势图」的当前参考线与序列自洽
+    if wmkt.get("pe_ttm") is not None and not val.get("pe_current"):
         val["pe_current"] = round(wmkt["pe_ttm"], 1)
-    if wmkt.get("pb") is not None:
+    if wmkt.get("pb") is not None and not val.get("pb_current"):
         val["pb_current"] = round(wmkt["pb"], 2)
     if wmkt.get("mktcap") is not None:
         val["mktcap"] = round(wmkt["mktcap"] / 1e8, 1)   # 元 → 亿元
-    val["wind"] = True                                   # 标记：当前倍数来自 Wind
+    val["wind"] = True                                   # 标记：估值倍数已叠加 Wind
+
+
+def _build_pe_panel(val, price, wmkt, wcons):
+    """
+    三视角 PE 面板 + 估值消化速度，就地写入 val['pe_panel']。
+
+    - 静态 PE：Wind 市盈率(LYR)（去年基准）；缺失退 price / 最新年度 EPS
+    - TTM PE：Wind 市盈率(TTM)（当前实况）+ 历史分位（来自 compute_valuation）
+    - Forward PE：Wind 市盈率(预测)（一致预期口径）+ 评级机构家数覆盖；
+                  缺失退 price / 历史 CAGR 外推 EPS，并标注 src='cagr'（非一致预期）
+    - 估值消化速度 =（TTM PE − Forward PE）/ TTM PE ×100%：
+                  >0 且越大 → 市场预期业绩越加速；≤0 → 业绩减速 / 见顶
+
+    Args:
+        val:   compute_valuation 返回（dict；空 {} 时直接跳过）
+        price: 现价（Wind 或新浪）
+        wmkt:  wind_data.market_indicators 返回（dict 或 None）
+        wcons: wind_data.consensus 返回（dict 或 None）
+    """
+    if not isinstance(val, dict) or not val:
+        return
+    wmkt = wmkt or {}
+
+    ttm = wmkt.get("pe_ttm") or val.get("pe_current")
+
+    static = wmkt.get("pe_lyr")
+    if static is None and price and val.get("eps_ttm") and val["eps_ttm"] > 0:
+        static = price / val["eps_ttm"]
+
+    fwd = wmkt.get("pe_fwd")
+    fwd_src = "consensus"
+    if fwd is None and price and val.get("eps_forward") and val["eps_forward"] > 0:
+        fwd = price / val["eps_forward"]
+        fwd_src = "cagr"
+
+    speed = ((ttm - fwd) / ttm) if (ttm and fwd and ttm > 0) else None
+
+    val["pe_panel"] = {
+        "static":          round(static, 1) if static else None,
+        "ttm":             round(ttm, 1) if ttm else None,
+        "ttm_percentile":  val.get("pe_percentile"),
+        "forward":         round(fwd, 1) if fwd else None,
+        "forward_src":     (fwd_src if fwd else None),
+        "coverage":        (wcons or {}).get("coverage"),
+        "digestion_speed": round(speed * 100, 1) if speed is not None else None,
+    }
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1785,6 +1820,13 @@ def api_analyze():
     risk  = compute_risk(raw)
     val   = compute_valuation(code, raw, price)
     _inject_wind_multiples(val, wmkt)         # Wind 权威 PE(TTM)/PB/市值 覆盖当前倍数
+    wcons = None                              # 一致预期覆盖（仅 Wind 有行情且有估值时查，省额度）
+    if wind is not None and wmkt and val:
+        try:
+            wcons = wind.consensus(code)
+        except Exception:
+            wcons = None
+    _build_pe_panel(val, price, wmkt, wcons)  # 三视角 PE + 估值消化速度
     fcst  = compute_forecast(raw, val, price)
     seg   = _fetch_segment_revenue(code)
 

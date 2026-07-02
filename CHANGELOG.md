@@ -4,6 +4,76 @@
 
 ---
 
+## [app_V5.13] — 2026-07-02
+
+### 修复 · 行业对比个股指标：目标股走 Wind、成分池走东财关键指标
+
+延续 V5.12：`industry_compare.get_stock_metrics` 原用已失效的新浪
+`stock_financial_analysis_indicator`，导致行业对比目标股 / 成分池指标抓不到。改为按
+「目标股权威、成分池省额度」分流（`get_stock_metrics(code, use_wind=)`）：
+
+- **目标股（use_wind=True）**：① Wind `wind_data.stock_metrics()` 走 `get_stock_fundamentals`，
+  取**「最近一个完整会计年度」**的 ROE/ROA/毛利率/净利率/资产负债率/周转率/营收·净利增速/
+  应收·存货周转/流动比率/总资产/EPS/BVPS/现金流质量（年度口径，匹配既有阈值与分位设计）
+  → ② 失败 / 额度用尽回退东财
+- **成分池（use_wind=False）**：仅 `stock_financial_abstract`（东财关键指标，免费可达）取最新
+  年报(1231)列，`_extract_metrics_abstract` 解析；`total_assets` 由 股东权益/(1−资产负债率)
+  反推为元。**每次行业构建仅 1 次 Wind 调用（目标股），成分池全走免费源**
+- 两路**同年度口径、量纲一致**（实测 600519：total_assets 均 3.038e11 元，毛利率/净利率/
+  增速/周转/EPS/BVPS 几乎完全一致；ROE/ROA 因加权/报酬率口径略差）→ 目标 vs 池不破坏可比性
+- 缓存键按通道区分（`metrics_` / `metrics_w_`），7d；`wind_data` 侧另缓存 30d
+- **实测 600519**：白酒Ⅱ 19 只成分全部入池、目标 ROE=34.462(Wind)、分位/雷达/分布/综合标签
+  全部恢复；整轮构建 **18.7s**（此前全池走 Wind 会逐只 NL 调用、单只曾 60s 超时）
+
+---
+
+## [app_V5.12] — 2026-07-02
+
+### 修复 · 历史 PE/PB 数据源改用东财日频估值（恢复历史分位 + 趋势图）
+
+- **根因**：`akshare.stock_financial_analysis_indicator` 抓新浪旧财务指标页
+  (`vFD_FinancialGuideLine`)，源站改版后 `soup.find(id='con02-1')` 变 `None` → 解析崩
+  (`'NoneType' object has no attribute 'find'`)；东财版 `..._em` 在本机同样失效（端点被墙）。
+- **修复**：`_get_pe_history` 改用 **`stock_value_em`（东财日频估值）**——一次调用取回日频
+  PE(TTM)/PE(静)/市净率/总市值，2018 至今、可达；其 PE-TTM 与 Wind 完全一致（600519：
+  18.03 对 18.03，佐证权威性）。取近 5 年日频序列 → 恢复历史分位、中位与 PE/PB 趋势图。
+- **一致性**：`_inject_wind_multiples` 改为「仅在历史序列未给出当前倍数时才用 Wind 兜底」，
+  使趋势图的「当前」参考线与序列末值自洽（PE 两者一致；PB 走东财日频口径，不与 Wind LF 混用）。
+- **实测**：600519 历史 1211 点、PE 中位 30.0、当前 PE 处 5 年 **0 分位**（茅台估值已压到 5 年低位）；
+  000001 平安银行 PE 中位 5.1、当前 21 分位。三视角 PE 的「历史分位」随之恢复显示。
+- **仍待修（同源牵连）**：行业对比的个股指标（`get_stock_metrics` 用同一失效的新浪接口）——
+  可另改 `stock_financial_abstract`（实测可用）或 Wind，待定。
+
+---
+
+## [app_V5.11] — 2026-07-02
+
+### 新增 · 三视角 PE + 估值消化速度（估值 Tab 顶部）
+
+估值 Tab 顶部新增「三视角 PE」面板，同屏对比三个口径的 PE 并给出一个前瞻差异指标：
+
+- **静态 PE**（去年基准）：Wind `市盈率(LYR)`（上年报口径）；缺失退 现价 / 最新年度 EPS
+- **TTM PE**（当前实况）：Wind `市盈率(TTM)` +（可得时）历史分位
+- **Forward PE**（前瞻）：Wind `市盈率(预测)`（一致预期口径）+ **评级机构家数**（覆盖广度）；
+  无 Wind 预测时退 现价 / 历史 CAGR 外推 EPS，并标注「历史外推（无一致预期）」
+- **估值消化速度** =（TTM PE − Forward PE）/ TTM PE：>0 且越大＝市场预期业绩越加速
+  （Forward PE 已低于当前 PE）；≤0 或为负＝业绩减速 / 见顶。红黄绿分档（>15 显著 / >3 温和 / ±3 持平 / <−3 减速）
+- 三视角 PE + 市值同在一次 `get_stock_price_indicators` 取回（零额外额度）；评级机构家数用
+  `get_stock_fundamentals` 单查、缓存 12h。新三板等无估值标的：面板自动清空
+- **实测 600519**：静态 18.1 / TTM 18.0 / Forward 17.3（一致预期 · 51 家覆盖）/ 消化速度 +4.2%
+- 实现：`wind_data.market_indicators` 增 pe_lyr/pe_fwd + 新增 `consensus()`；`app_V5._build_pe_panel()`
+  在 `api_analyze` 主链注入 `val['pe_panel']`；前端 `renderValuation` 顶部渲染四卡面板
+
+### 已知问题（先行记录，待修）
+
+- **`stock_financial_analysis_indicator`（akshare）当前失效**（报 `'NoneType' object has no attribute 'find'`，
+  源站页面改版 / 被墙）→ 连带影响：① 三视角 PE 面板的「历史分位」暂为空（TTM 卡显示「当前实况」）；
+  ② 估值 Tab 的历史 PE / PB 趋势图、PE/PB 中位与分位信号暂为空；③ 行业对比的个股指标（同源）。
+  三视角 PE 本体、估值消化速度、当前 PE/PB/市值均走 Wind，不受影响。修复方向：历史分位 / 指标改由
+  Wind 取，或用「新浪日线 + 三大报表 EPS」自算历史 PE（sina 日线正常）——待定后实施
+
+---
+
 ## [app_V5.10] — 2026-07-01
 
 ### 新增 · Wind 第一通道（估值 + 名称/行业，双通道回退）
