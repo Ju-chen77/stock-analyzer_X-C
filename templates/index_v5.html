@@ -464,7 +464,7 @@ footer{width:100%;font-family:var(--mono);font-size:12px;
 
     <!-- ── Tab 4：估值区间 ── -->
     <div class="tab-panel" id="t4">
-      <p class="sec-label">三视角 PE · 估值消化速度</p>
+      <p class="sec-label">三口径 PE · 静态 / TTM / 动态</p>
       <div id="val-pe-panel" style="margin-bottom:24px"></div>
 
       <p class="sec-label">PE / PB 六维矩阵信号</p>
@@ -1719,7 +1719,7 @@ function renderRisk(risk) {
 
 // ── 第四段：估值区间 ──────────────────────────────────────
 function renderValuation(val) {
-  // ── 三视角 PE 面板 + 估值消化速度（先渲染；无估值时清空，避免残留上一只股）──
+  // ── 三口径 PE 面板：静态 / TTM / 动态（先渲染；无估值时清空，避免残留上一只股）──
   const P = val && val.pe_panel;
   const pePanelEl = $('#val-pe-panel');
   if (pePanelEl) {
@@ -1727,35 +1727,21 @@ function renderValuation(val) {
       pePanelEl.innerHTML = '';
     } else {
       const pv = v => (v == null ? '—' : v + '×');
-      const sp = P.digestion_speed;
-      let spCls = 'grey', spTxt = '数据不足';
-      if (sp != null) {
-        if (sp > 15)       { spCls = 'green';  spTxt = '业绩显著加速'; }
-        else if (sp > 3)   { spCls = 'green';  spTxt = '业绩温和加速'; }
-        else if (sp >= -3) { spCls = 'yellow'; spTxt = '大体持平'; }
-        else               { spCls = 'red';    spTxt = '业绩减速 / 见顶'; }
-      }
       const ttmNote = P.ttm_percentile != null ? ('历史分位 ' + Math.round(P.ttm_percentile) + '%') : '当前实况';
-      const fwdNote = P.forward == null ? '无一致预期'
-        : (P.forward_src === 'consensus'
-            ? ('一致预期' + (P.coverage != null ? (' · ' + P.coverage + ' 家覆盖') : ''))
-            : '历史外推（无一致预期）');
-      const peCard = (name, v, note, cls) =>
-        '<div class="dash-card ' + (cls || '') + '" style="padding:16px 14px">'
+      const peCard = (name, v, note) =>
+        '<div class="dash-card" style="padding:16px 14px">'
         + '<div class="d-head"><span class="d-name">' + name + '</span></div>'
         + '<div class="d-val" style="font-size:26px">' + v + '</div>'
         + '<div class="d-desc">' + note + '</div></div>';
-      const spVal = sp == null ? '—' : ((sp > 0 ? '+' : '') + sp + '%');
       pePanelEl.innerHTML =
-        '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px">'
-        + peCard('静态 PE', pv(P.static), '去年基准（上年报 EPS）', '')
-        + peCard('TTM PE', pv(P.ttm), ttmNote, '')
-        + peCard('Forward PE', pv(P.forward), fwdNote, '')
-        + peCard('估值消化速度', spVal, spTxt, spCls)
+        '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px">'
+        + peCard('静态 PE', pv(P.static), '去年基准（上年报 EPS）')
+        + peCard('TTM PE', pv(P.ttm), ttmNote)
+        + peCard('动态 PE', pv(P.dynamic), '最新报告期 EPS 年化')
         + '</div>'
-        + '<p class="chart-note" style="margin-top:10px">估值消化速度 =（TTM PE − Forward PE）/ TTM PE。'
-        + '<b style="color:var(--ink)">越大</b>＝市场预期业绩越加速（Forward PE 已低于当前 PE）；'
-        + '<b style="color:var(--ink)">越小或为负</b>＝业绩减速 / 见顶。</p>';
+        + '<p class="chart-note" style="margin-top:10px">'
+        + '静态＝上年报 EPS；TTM＝滚动 12 月；动态＝最新报告期 EPS 年化。'
+        + '三口径盈利基期由旧到新，动态 &lt; TTM &lt; 静态 通常意味盈利提速（动态受季报年化季节性影响）。</p>';
     }
   }
 

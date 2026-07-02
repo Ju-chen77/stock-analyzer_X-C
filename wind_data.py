@@ -245,12 +245,12 @@ def windcode(code, market=None):
 # ── 对外接口 ─────────────────────────────────────────────────
 def market_indicators(code, market=None):
     """
-    现价 / 总市值 / 三视角 PE / PB。命中缓存或 Wind；失败 / 额度 / 无数据 → None。
+    现价 / 总市值 / 静态·TTM PE / PB。命中缓存或 Wind；失败 / 额度 / 无数据 → None。
 
-    三视角 PE 同一次调用取回（零额外额度）：
-      pe_ttm = 市盈率(TTM)   当前实况
+    PE 两口径同一次调用取回（零额外额度）：
+      pe_ttm = 市盈率(TTM)   当前实况（滚动 12 月）
       pe_lyr = 市盈率(LYR)   静态（上年报口径，去年基准）
-      pe_fwd = 市盈率(预测)  前瞻（Wind 一致预期口径）
+    （动态 PE 由 app 端用最新报告期 EPS 年化自算，Wind 无该口径字段）
     """
     ck = f"wind_mkt_{code}_{market or ''}"
     c = _cache_get(ck, 12 * 3600)
@@ -258,8 +258,7 @@ def market_indicators(code, market=None):
         return c or None
     inner, err = _call("stock_data", "get_stock_price_indicators",
                        {"windcode": windcode(code, market),
-                        "indexes": "中文简称,最新成交价,总市值2,"
-                                   "市盈率(TTM),市盈率(LYR),市盈率(预测),市净率(LF)"})
+                        "indexes": "中文简称,最新成交价,总市值2,市盈率(TTM),市盈率(LYR),市净率(LF)"})
     if err:
         return None
     m = _row_dict(inner)
@@ -269,37 +268,7 @@ def market_indicators(code, market=None):
     res = {"name": m.get("中文简称"), "price": _f(m.get("最新成交价")),
            "mktcap": _f(m.get("总市值2")),
            "pe_ttm": _f(m.get("市盈率(TTM)")), "pe_lyr": _f(m.get("市盈率(LYR)")),
-           "pe_fwd": _f(m.get("市盈率(预测)")), "pb": _f(m.get("市净率(LF)"))}
-    _cache_set(ck, res)
-    return res
-
-
-def consensus(code, market=None):
-    """
-    一致预期覆盖度：评级机构家数（Forward PE 的覆盖广度代理）。
-
-    Wind 行情指标里没有「一致预期机构数」字段，改用 get_stock_fundamentals 的
-    「评级机构家数」——即对该标的出具评级 / 盈利预测的机构数量。无覆盖 / 小盘股
-    多为空。返回 {coverage:int|None}；失败 / 额度 → None。缓存 12h。
-    """
-    ck = f"wind_cons_{code}_{market or ''}"
-    c = _cache_get(ck, 12 * 3600)
-    if c is not None:
-        return c or None
-    inner, err = _call("stock_data", "get_stock_fundamentals",
-                       {"question": windcode(code, market) + " 评级机构家数"})
-    if err:
-        return None
-    m = _row_dict(inner)
-    if not m:
-        _cache_set(ck, {})
-        return None
-    cov = None
-    for k, v in m.items():
-        if "机构家数" in k or "评级机构" in k:
-            cov = _f(v)
-            break
-    res = {"coverage": int(cov) if cov is not None else None}
+           "pb": _f(m.get("市净率(LF)"))}
     _cache_set(ck, res)
     return res
 

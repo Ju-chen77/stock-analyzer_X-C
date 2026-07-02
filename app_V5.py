@@ -1093,8 +1093,19 @@ def compute_valuation(code, raw, price):
     eps_forward = eps_latest * (1 + eps_growth) if (eps_latest and eps_growth is not None) else eps_latest
 
     pe_from_price = sdiv(price, eps_latest) if (eps_latest and eps_latest > 0) else None
-    forward_pe    = sdiv(price, eps_forward) if (eps_forward and eps_forward > 0) else None
     peg           = sdiv(pe_from_price, (eps_growth or 0) * 100) if (pe_from_price and eps_growth and eps_growth > 0) else None
+
+    # ── 动态 PE：现价 / 最新报告期 EPS 年化（累计EPS × 4/季度数）──────
+    #    纯已披露数据、不含预测；季报年化对季节性强的标的会有偏差（动态市盈率固有口径）
+    pe_dynamic = None
+    if eps_col and price and "_date" in income.columns and len(income):
+        _idx = income["_date"].astype(str).idxmax()          # 最新报告期
+        _ld  = str(income.loc[_idx, "_date"])
+        _le  = sf(income.loc[_idx, eps_col])                 # 该期累计 EPS
+        if _le and _le > 0 and len(_ld) == 8:
+            _q = int(_ld[4:6]) // 3 or 4                      # 03→1 / 06→2 / 09→3 / 12→4
+            _dyn_eps = _le * 4.0 / _q
+            pe_dynamic = round(price / _dyn_eps, 1) if _dyn_eps > 0 else None
 
     # ── PE 六维矩阵信号 ─────────────────────────────────────
     def sig(positive_cond, neutral_cond=None):
@@ -1119,9 +1130,13 @@ def compute_valuation(code, raw, price):
                           pe_pct < 70 if pe_pct is not None else None),
         },
         {
-            "name":   "Forward PE",
-            "value":  f"{forward_pe:.1f}×" if forward_pe else "N/A",
-            "signal": sig(forward_pe < pe_from_price if (forward_pe and pe_from_price) else None),
+            # 原「Forward PE」依赖一致预期/预测 EPS（权威数据获取壁垒）→ 改用动态 PE：
+            # 现价/最新报告期年化 EPS，纯已披露；动态 < TTM 表示本年盈利较滚动 12 月提速
+            "name":   "动态 PE vs TTM",
+            "value":  (f"{pe_dynamic:.1f}× / TTM {pe_current:.1f}×" if (pe_dynamic and pe_current)
+                       else (f"{pe_dynamic:.1f}×" if pe_dynamic else "N/A")),
+            "signal": sig(pe_dynamic < pe_current if (pe_dynamic and pe_current) else None,
+                          pe_dynamic < pe_current * 1.15 if (pe_dynamic and pe_current) else None),
         },
         {
             "name":   "PEG",
@@ -1173,6 +1188,7 @@ def compute_valuation(code, raw, price):
     return {
         "pe_current":    round(pe_current, 1)  if pe_current  else None,
         "pb_current":    round(pb_current, 2)  if pb_current  else None,
+        "pe_dynamic":    pe_dynamic,
         "pe_median":     round(pe_median, 1)   if pe_median   else None,
         "pb_median":     round(pb_median, 2)   if pb_median   else None,
         "pe_percentile": round(pe_pct, 0)      if pe_pct is not None else None,
@@ -1214,49 +1230,35 @@ def _inject_wind_multiples(val, wmkt):
     val["wind"] = True                                   # 标记：估值倍数已叠加 Wind
 
 
-def _build_pe_panel(val, price, wmkt, wcons):
+def _build_pe_panel(val, price, wmkt):
     """
-    三视角 PE 面板 + 估值消化速度，就地写入 val['pe_panel']。
+    三口径 PE 面板：静态 / TTM / 动态，就地写入 val['pe_panel']。
 
-    - 静态 PE：Wind 市盈率(LYR)（去年基准）；缺失退 price / 最新年度 EPS
-    - TTM PE：Wind 市盈率(TTM)（当前实况）+ 历史分位（来自 compute_valuation）
-    - Forward PE：Wind 市盈率(预测)（一致预期口径）+ 评级机构家数覆盖；
-                  缺失退 price / 历史 CAGR 外推 EPS，并标注 src='cagr'（非一致预期）
-    - 估值消化速度 =（TTM PE − Forward PE）/ TTM PE ×100%：
-                  >0 且越大 → 市场预期业绩越加速；≤0 → 业绩减速 / 见顶
+    - 静态 PE：Wind 市盈率(LYR)（去年基准，上年报 EPS）；缺失退 price / 最新年度 EPS
+    - TTM PE：Wind 市盈率(TTM)（当前实况，滚动 12 月）+ 历史分位（来自 compute_valuation）
+    - 动态 PE：现价 / 最新报告期 EPS 年化（compute_valuation 已算 pe_dynamic，纯已披露、无预测）
+
+    三口径按盈利基期由旧到新排列（去年 → 滚动12月 → 本年年化），并列看盈利与估值趋势。
 
     Args:
         val:   compute_valuation 返回（dict；空 {} 时直接跳过）
         price: 现价（Wind 或新浪）
         wmkt:  wind_data.market_indicators 返回（dict 或 None）
-        wcons: wind_data.consensus 返回（dict 或 None）
     """
     if not isinstance(val, dict) or not val:
         return
     wmkt = wmkt or {}
 
     ttm = wmkt.get("pe_ttm") or val.get("pe_current")
-
     static = wmkt.get("pe_lyr")
     if static is None and price and val.get("eps_ttm") and val["eps_ttm"] > 0:
         static = price / val["eps_ttm"]
 
-    fwd = wmkt.get("pe_fwd")
-    fwd_src = "consensus"
-    if fwd is None and price and val.get("eps_forward") and val["eps_forward"] > 0:
-        fwd = price / val["eps_forward"]
-        fwd_src = "cagr"
-
-    speed = ((ttm - fwd) / ttm) if (ttm and fwd and ttm > 0) else None
-
     val["pe_panel"] = {
-        "static":          round(static, 1) if static else None,
-        "ttm":             round(ttm, 1) if ttm else None,
-        "ttm_percentile":  val.get("pe_percentile"),
-        "forward":         round(fwd, 1) if fwd else None,
-        "forward_src":     (fwd_src if fwd else None),
-        "coverage":        (wcons or {}).get("coverage"),
-        "digestion_speed": round(speed * 100, 1) if speed is not None else None,
+        "static":         round(static, 1) if static else None,
+        "ttm":            round(ttm, 1) if ttm else None,
+        "ttm_percentile": val.get("pe_percentile"),
+        "dynamic":        val.get("pe_dynamic"),
     }
 
 
@@ -1820,13 +1822,7 @@ def api_analyze():
     risk  = compute_risk(raw)
     val   = compute_valuation(code, raw, price)
     _inject_wind_multiples(val, wmkt)         # Wind 权威 PE(TTM)/PB/市值 覆盖当前倍数
-    wcons = None                              # 一致预期覆盖（仅 Wind 有行情且有估值时查，省额度）
-    if wind is not None and wmkt and val:
-        try:
-            wcons = wind.consensus(code)
-        except Exception:
-            wcons = None
-    _build_pe_panel(val, price, wmkt, wcons)  # 三视角 PE + 估值消化速度
+    _build_pe_panel(val, price, wmkt)         # 三口径 PE：静态 / TTM / 动态
     fcst  = compute_forecast(raw, val, price)
     seg   = _fetch_segment_revenue(code)
 
